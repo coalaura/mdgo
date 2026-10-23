@@ -49,34 +49,26 @@ func HandleFrontend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := serveFrontendFile(w, r, name)
-	if !errors.Is(err, fs.ErrNotExist) {
-		writeFrontendError(w, r, err)
-
-		return
-	}
-
-	if !strings.HasSuffix(name, ".html") {
+	file, info, err := openFrontendFile(name)
+	if errors.Is(err, fs.ErrNotExist) && !strings.HasSuffix(name, ".html") {
 		name += ".html"
 
-		err = serveFrontendFile(w, r, name)
-		if !errors.Is(err, fs.ErrNotExist) {
-			writeFrontendError(w, r, err)
-
-			return
-		}
+		file, info, err = openFrontendFile(name)
 	}
 
-	err = renderFrontendFile(name)
+	if errors.Is(err, fs.ErrNotExist) {
+		file, info, err = renderFrontendFile(name)
+	}
+
 	if err != nil {
 		writeFrontendError(w, r, err)
 
 		return
 	}
 
-	err = serveFrontendFile(w, r, name)
+	defer file.Close()
 
-	writeFrontendError(w, r, err)
+	http.ServeContent(w, r, name, info.ModTime(), file)
 }
 
 func handleFrontendRedirect(w http.ResponseWriter, r *http.Request, name string) bool {
@@ -123,49 +115,66 @@ func handleFrontendRedirect(w http.ResponseWriter, r *http.Request, name string)
 		return true
 	}
 
-	target := url.URL{
-		Path:       targetPath,
-		RawQuery:   r.URL.RawQuery,
-		ForceQuery: r.URL.ForceQuery,
+	target := url.URL{Path: targetPath}
+	location := target.EscapedPath()
+
+	if r.URL.ForceQuery || r.URL.RawQuery != "" {
+		location += "?" + r.URL.RawQuery
 	}
 
-	http.Redirect(w, r, target.String(), http.StatusMovedPermanently)
+	http.Redirect(w, r, location, http.StatusMovedPermanently)
 
 	return true
 }
 
-func serveFrontendFile(w http.ResponseWriter, r *http.Request, name string) error {
+func openFrontendFile(name string) (*os.File, fs.FileInfo, error) {
 	file, err := public.Open(name)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-
-	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil {
-		return err
+		file.Close()
+
+		return nil, nil, err
 	}
 
 	if !info.Mode().IsRegular() {
-		return fs.ErrNotExist
+		file.Close()
+
+		return nil, info, fs.ErrNotExist
 	}
 
-	http.ServeContent(w, r, name, info.ModTime(), file)
-
-	return nil
+	return file, info, nil
 }
 
-func renderFrontendFile(name string) error {
+func renderFrontendFile(name string) (*os.File, fs.FileInfo, error) {
+	markdownName := strings.TrimSuffix(name, ".html") + ".md"
+
+	_, err := public.Stat(markdownName)
+	if err != nil {
+		return nil, nil, err
+	}
+
 	frontendLocks.Lock(name)
 	defer frontendLocks.Unlock(name)
 
-	_, err := public.Stat(name)
-	if !errors.Is(err, fs.ErrNotExist) {
-		return err
+	file, info, err := openFrontendFile(name)
+	if info != nil || !errors.Is(err, fs.ErrNotExist) {
+		return file, info, err
 	}
 
-	source, err := public.ReadFile(strings.TrimSuffix(name, ".html") + ".md")
+	err = writeFrontendHTML(name, markdownName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return openFrontendFile(name)
+}
+
+func writeFrontendHTML(name, markdownName string) error {
+	source, err := public.ReadFile(markdownName)
 	if err != nil {
 		return err
 	}
