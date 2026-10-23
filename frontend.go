@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -18,9 +19,9 @@ import (
 const PublicDirectory = "public"
 
 var (
-	frontendRenderLocks = lock.NewLockMap[string]()
-	frontendParser      = parser.New()
-	frontendRenderer    = html.New()
+	frontendLocks    = lock.NewLockMap[string]()
+	frontendParser   = parser.New()
+	frontendRenderer = html.New()
 )
 
 func LoadPublicRoot() (*os.Root, error) {
@@ -41,6 +42,10 @@ func HandleFrontend(w http.ResponseWriter, r *http.Request) {
 	if !fs.ValidPath(name) || strings.ContainsAny(name, "\\:") {
 		http.NotFound(w, r)
 
+		return
+	}
+
+	if handleFrontendRedirect(w, r, name) {
 		return
 	}
 
@@ -74,6 +79,61 @@ func HandleFrontend(w http.ResponseWriter, r *http.Request) {
 	writeFrontendError(w, r, err)
 }
 
+func handleFrontendRedirect(w http.ResponseWriter, r *http.Request, name string) bool {
+	extension := path.Ext(name)
+
+	isMarkdown := strings.EqualFold(extension, ".md")
+	isHTML := strings.EqualFold(extension, ".html")
+
+	targetPath := r.URL.Path
+
+	if isMarkdown || isHTML {
+		targetPath = strings.TrimSuffix(targetPath, extension)
+	}
+
+	redirectIndex := config.Frontend.RedirectIndex && strings.HasSuffix(targetPath, "/index")
+	if redirectIndex {
+		targetPath = strings.TrimSuffix(targetPath, "index")
+	} else if !isMarkdown && (!isHTML || !config.Frontend.RedirectHTML) {
+		return false
+	}
+
+	info, err := public.Stat(name)
+
+	if !isMarkdown && !isHTML {
+		missingFile := errors.Is(err, fs.ErrNotExist) || err == nil && !info.Mode().IsRegular()
+		if missingFile {
+			info, err = public.Stat(name + ".html")
+		}
+	}
+
+	if !isMarkdown && errors.Is(err, fs.ErrNotExist) {
+		info, err = public.Stat(strings.TrimSuffix(name, extension) + ".md")
+	}
+
+	if err != nil {
+		writeFrontendError(w, r, err)
+
+		return true
+	}
+
+	if !info.Mode().IsRegular() {
+		http.NotFound(w, r)
+
+		return true
+	}
+
+	target := url.URL{
+		Path:       targetPath,
+		RawQuery:   r.URL.RawQuery,
+		ForceQuery: r.URL.ForceQuery,
+	}
+
+	http.Redirect(w, r, target.String(), http.StatusMovedPermanently)
+
+	return true
+}
+
 func serveFrontendFile(w http.ResponseWriter, r *http.Request, name string) error {
 	file, err := public.Open(name)
 	if err != nil {
@@ -97,8 +157,8 @@ func serveFrontendFile(w http.ResponseWriter, r *http.Request, name string) erro
 }
 
 func renderFrontendFile(name string) error {
-	frontendRenderLocks.Lock(name)
-	defer frontendRenderLocks.Unlock(name)
+	frontendLocks.Lock(name)
+	defer frontendLocks.Unlock(name)
 
 	_, err := public.Stat(name)
 	if !errors.Is(err, fs.ErrNotExist) {

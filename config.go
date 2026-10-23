@@ -20,6 +20,12 @@ type ConfigServer struct {
 }
 
 // gost:preserve-layout
+type ConfigFrontend struct {
+	RedirectHTML  bool `yaml:"redirect_html"`
+	RedirectIndex bool `yaml:"redirect_index"`
+}
+
+// gost:preserve-layout
 type ConfigTokens struct {
 	Auth string `yaml:"auth"`
 }
@@ -31,8 +37,9 @@ type ConfigTLDs []string
 type Config struct {
 	mp map[string]struct{}
 
-	Server ConfigServer `yaml:"server"`
-	Tokens ConfigTokens `yaml:"tokens"`
+	Server   ConfigServer   `yaml:"server"`
+	Frontend ConfigFrontend `yaml:"frontend"`
+	Tokens   ConfigTokens   `yaml:"tokens"`
 }
 
 func (c *Config) Addr() string {
@@ -75,9 +82,13 @@ func (c *Config) Store() error {
 	var (
 		buffer   bytes.Buffer
 		comments = yaml.CommentMap{
-			"$.tokens": {yaml.HeadComment("")},
+			"$.frontend": {yaml.HeadComment("")},
+			"$.tokens":   {yaml.HeadComment("")},
 
 			"$.server.port": {yaml.HeadComment(" port to serve tldler on (required; default 2727)")},
+
+			"$.frontend.redirect_html":  {yaml.HeadComment(" redirect .html URLs to extensionless paths (default true)")},
+			"$.frontend.redirect_index": {yaml.HeadComment(" redirect index, index.html and index.md URLs to their directory; overrides redirect_html (default true)")},
 
 			"$.tokens.auth": {yaml.HeadComment(" auth token for login; auto-generated if empty")},
 		}
@@ -97,6 +108,10 @@ func DefaultConfig() *Config {
 	return &Config{
 		Server: ConfigServer{
 			Port: 2727,
+		},
+		Frontend: ConfigFrontend{
+			RedirectHTML:  true,
+			RedirectIndex: true,
 		},
 	}
 }
