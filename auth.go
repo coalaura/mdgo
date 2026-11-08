@@ -4,11 +4,23 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 type contextKey string
 
 const authKey contextKey = "auth"
+
+func GetClientIP(r *http.Request) string {
+	ip := r.RemoteAddr
+
+	idx := strings.LastIndex(ip, ":")
+	if idx != -1 {
+		ip = ip[:idx]
+	}
+
+	return strings.Trim(ip, "[]")
+}
 
 func IsAuthenticated(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

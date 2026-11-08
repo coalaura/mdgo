@@ -40,7 +40,12 @@ func main() {
 
 	r.Get("/*", HandleFrontend)
 
-	r.Post("/-/admin", HandleAdmin)
+	r.Group(func(gr chi.Router) {
+		gr.Use(IsAuthenticated)
+
+		gr.Post("/-/login", HandleLogin)
+		gr.Post("/-/admin", HandleAdmin)
+	})
 
 	r.Group(func(gr chi.Router) {
 		gr.Use(RequiresAuthentication)
