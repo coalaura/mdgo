@@ -47,7 +47,7 @@ func main() {
 		gr.Get("/-/login", HandleLogin)
 		gr.Post("/-/login", HandleLogin)
 		gr.Get("/-/logout", HandleLogout)
-		gr.Post("/-/admin", HandleAdmin)
+		gr.Get("/-/admin", HandleAdmin)
 	})
 
 	r.Group(func(gr chi.Router) {
