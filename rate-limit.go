@@ -37,11 +37,7 @@ func CheckRateLimit(r *http.Request, typ RateLimitType) *time.Duration {
 	})
 
 	if !created {
-		now := time.Now()
-
-		RateLimits.SetWithTTL(key, time.Now(), limit)
-
-		return new(limit - now.Sub(lt))
+		return new(limit - time.Since(lt))
 	}
 
 	return nil
