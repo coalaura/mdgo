@@ -101,7 +101,7 @@ func (c *Config) Store() error {
 
 	body := bytes.ReplaceAll(buffer.Bytes(), []byte("#\n"), []byte("\n"))
 
-	return os.WriteFile(ConfigPath, body, 0644)
+	return os.WriteFile(ConfigPath, body, 0600)
 }
 
 func DefaultConfig() *Config {
@@ -128,6 +128,10 @@ func LoadConfig() (*Config, error) {
 			return nil, err
 		}
 	} else {
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+
 		err = cfg.Store()
 		if err != nil {
 			return nil, err
