@@ -39,11 +39,14 @@ func main() {
 	r.Use(log.Middleware())
 
 	r.Get("/*", HandleFrontend)
+	r.Head("/*", HandleFrontend)
 
 	r.Group(func(gr chi.Router) {
 		gr.Use(IsAuthenticated)
 
+		gr.Get("/-/login", HandleLogin)
 		gr.Post("/-/login", HandleLogin)
+		gr.Get("/-/logout", HandleLogout)
 		gr.Post("/-/admin", HandleAdmin)
 	})
 

@@ -50,7 +50,17 @@ func HandleFrontend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	file, info, err := openFrontendFile(name)
-	if errors.Is(err, fs.ErrNotExist) && !strings.HasSuffix(name, ".html") {
+	if info != nil && info.IsDir() && !strings.HasSuffix(r.URL.Path, "/") {
+		target := url.URL{
+			Path:       r.URL.Path + "/",
+			RawQuery:   r.URL.RawQuery,
+			ForceQuery: r.URL.ForceQuery,
+		}
+
+		http.Redirect(w, r, target.RequestURI(), http.StatusMovedPermanently)
+
+		return
+	} else if errors.Is(err, fs.ErrNotExist) && !strings.HasSuffix(name, ".html") {
 		name += ".html"
 
 		file, info, err = openFrontendFile(name)
