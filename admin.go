@@ -59,6 +59,7 @@ func HandleLogin(w http.ResponseWriter, r *http.Request) {
 			HttpOnly: true,
 			MaxAge:   int(AuthTokenTTL.Seconds()),
 			SameSite: http.SameSiteStrictMode,
+			Secure:   config.Server.Secure,
 		})
 
 		http.Redirect(w, r, "/-/admin", http.StatusFound)
@@ -78,6 +79,7 @@ func HandleLogout(w http.ResponseWriter, r *http.Request) {
 			HttpOnly: true,
 			MaxAge:   -1,
 			SameSite: http.SameSiteStrictMode,
+			Secure:   config.Server.Secure,
 		})
 	}
 

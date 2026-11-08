@@ -32,9 +32,11 @@ func CheckRateLimit(r *http.Request, typ RateLimitType) *time.Duration {
 
 	key := RateLimitKey(ip, name)
 
-	lt, exists := RateLimits.Get(key)
+	lt, created, _ := RateLimits.GetOrFillWithTTL(key, limit, func() (time.Time, error) {
+		return time.Now(), nil
+	})
 
-	if exists {
+	if !created {
 		now := time.Now()
 		if now.Sub(lt) < limit {
 			tryAgain := limit - now.Sub(lt)
@@ -42,8 +44,6 @@ func CheckRateLimit(r *http.Request, typ RateLimitType) *time.Duration {
 			return &tryAgain
 		}
 	}
-
-	RateLimits.SetWithTTL(key, time.Now(), limit)
 
 	return nil
 }

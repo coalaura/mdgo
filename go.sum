@@ -1,7 +1,7 @@
 github.com/coalaura/atom v0.2.0 h1:JLZICYXj3APUNNfWnFOOXslthxNO0IhMPCAzYkfDGvs=
 github.com/coalaura/atom v0.2.0/go.mod h1:ACJfMKNeHYoZYmmeB1It/bl35A2VKs9QuKwnZdIVJT8=
-github.com/coalaura/lock v0.1.3 h1:IoeEernIW+18uEve7ZNQcBSmMgejCXHHvjuyyl/Uq0s=
-github.com/coalaura/lock v0.1.3/go.mod h1:3xV4zyg6jhPyPK08qiP9AdzlNt72HO0MaAuMOh/v9Kw=
+github.com/coalaura/lock v0.1.4 h1:mc5NFuhUkRzJbbtjPwzaB8b/tzC3sOEifbi4oUBrA8Q=
+github.com/coalaura/lock v0.1.4/go.mod h1:3xV4zyg6jhPyPK08qiP9AdzlNt72HO0MaAuMOh/v9Kw=
 github.com/coalaura/plain v1.6.6 h1:JOn/45x2iBzGuJFWlBzsGPqt7OemxbNhdukDyunANic=
 github.com/coalaura/plain v1.6.6/go.mod h1:8RE9XMZjc0DdRt1/coC8bzwSPEeMWMi0fASj6X1pXx8=
 github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeORc=

@@ -63,20 +63,25 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancelCause(context.Background())
 
 	go func() {
 		log.Printf("Listening at http://localhost%s/\n", addr)
 
 		err = server.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Warnln(err)
-
-			cancel()
+			cancel(err)
 		}
 	}()
 
 	log.WaitForInterruptCtx(ctx)
+
+	err = ctx.Err()
+	if err != nil {
+		log.Errorln(err)
+
+		os.Exit(1)
+	}
 
 	log.Warnln("Shutting down...")
 

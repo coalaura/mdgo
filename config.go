@@ -15,8 +15,9 @@ const ConfigPath = "config.yml"
 
 // gost:preserve-layout
 type ConfigServer struct {
-	Port  int64  `yaml:"port"`
-	Theme string `yaml:"theme"`
+	Port   int64  `yaml:"port"`
+	Secure bool   `yaml:"secure"`
+	Theme  string `yaml:"theme"`
 }
 
 // gost:preserve-layout
@@ -85,7 +86,9 @@ func (c *Config) Store() error {
 			"$.frontend": {yaml.HeadComment("")},
 			"$.tokens":   {yaml.HeadComment("")},
 
-			"$.server.port": {yaml.HeadComment(" port to serve tldler on (required; default 2727)")},
+			"$.server.port":   {yaml.HeadComment(" port to serve mdgo on (required; default 2727)")},
+			"$.server.secure": {yaml.HeadComment(" if mdgo is being served with TLS (default: false)")},
+			"$.server.theme":  {yaml.HeadComment(" mdgo theme (default: \"default\")")},
 
 			"$.frontend.redirect_html":  {yaml.HeadComment(" redirect .html URLs to extensionless paths (default true)")},
 			"$.frontend.redirect_index": {yaml.HeadComment(" redirect index, index.html and index.md URLs to their directory; overrides redirect_html (default true)")},
@@ -107,7 +110,9 @@ func (c *Config) Store() error {
 func DefaultConfig() *Config {
 	return &Config{
 		Server: ConfigServer{
-			Port: 2727,
+			Port:   2727,
+			Secure: false,
+			Theme:  "default",
 		},
 		Frontend: ConfigFrontend{
 			RedirectHTML:  true,
@@ -122,6 +127,18 @@ func LoadConfig() (*Config, error) {
 	file, err := os.OpenFile(ConfigPath, os.O_RDONLY, 0)
 	if err == nil {
 		defer file.Close()
+
+		info, err := file.Stat()
+		if err != nil {
+			return nil, err
+		}
+
+		if info.Mode() != 0600 {
+			err = os.Chmod(ConfigPath, 0600)
+			if err != nil {
+				return nil, err
+			}
+		}
 
 		err = yaml.NewDecoder(file).Decode(cfg)
 		if err != nil {
