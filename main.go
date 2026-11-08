@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"os"
@@ -62,16 +63,20 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	go func() {
 		log.Printf("Listening at http://localhost%s/\n", addr)
 
 		err = server.ListenAndServe()
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Warnln(err)
+
+			cancel()
 		}
 	}()
 
-	log.WaitForInterrupt()
+	log.WaitForInterruptCtx(ctx)
 
 	log.Warnln("Shutting down...")
 

@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/coalaura/lock v0.1.3
-	github.com/coalaura/plain v1.6.5
+	github.com/coalaura/plain v1.6.6
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/goccy/go-yaml v1.19.2
 	github.com/yuin/goldmark/v2 v2.1.15
