@@ -76,7 +76,7 @@ func main() {
 
 	log.WaitForInterruptCtx(ctx)
 
-	err = ctx.Err()
+	err = context.Cause(ctx)
 	if err != nil {
 		log.Errorln(err)
 
