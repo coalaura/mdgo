@@ -21,7 +21,7 @@ const PublicDirectory = "public"
 var (
 	frontendLocks    = lock.NewLockMap[string]()
 	frontendParser   = parser.New()
-	frontendRenderer = html.New()
+	frontendRenderer = html.New(html.WithUnsafe())
 )
 
 func LoadPublicRoot() (*os.Root, error) {
