@@ -22,6 +22,10 @@ var (
 	ThemeDefaultFS embed.FS
 )
 
+func (t *Theme) Render(wr io.Writer, markdown []byte) error {
+	return t.layout.Execute(wr, nil, NewThemeData(markdown, nil))
+}
+
 func LoadTheme() (*Theme, error) {
 	if config.Server.Theme == "" || config.Server.Theme == "default" {
 		root, err := fs.Sub(ThemeDefaultFS, "themes/default")
