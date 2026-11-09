@@ -1,3 +1,7 @@
+github.com/CloudyKit/fastprinter v0.0.0-20200109182630-33d98a066a53 h1:sR+/8Yb4slttB4vD+b9btVEnWgL3Q00OBTzVT8B9C0c=
+github.com/CloudyKit/fastprinter v0.0.0-20200109182630-33d98a066a53/go.mod h1:+3IMCy2vIlbG1XG/0ggNQv0SvxCAIpPM5b1nCz56Xno=
+github.com/CloudyKit/jet/v6 v6.3.3 h1:a3EUQtQFmNDTw+dVpwyyWb04l/TxU5VfJ+hiGsws1sQ=
+github.com/CloudyKit/jet/v6 v6.3.3/go.mod h1:lf8ksdNsxZt7/yH/3n4vJQWA9RUq4wpaHtArHhGVMOw=
 github.com/coalaura/atom v0.2.0 h1:JLZICYXj3APUNNfWnFOOXslthxNO0IhMPCAzYkfDGvs=
 github.com/coalaura/atom v0.2.0/go.mod h1:ACJfMKNeHYoZYmmeB1It/bl35A2VKs9QuKwnZdIVJT8=
 github.com/coalaura/lock v0.1.4 h1:mc5NFuhUkRzJbbtjPwzaB8b/tzC3sOEifbi4oUBrA8Q=

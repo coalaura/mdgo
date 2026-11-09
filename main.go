@@ -14,6 +14,7 @@ import (
 
 var (
 	config *Config
+	theme  *Theme
 	public *os.Root
 
 	log = plain.New(plain.WithDate(plain.RFC3339Local))
@@ -25,6 +26,11 @@ func main() {
 	log.Println("Loading config...")
 
 	config, err = LoadConfig()
+	log.MustFail(err)
+
+	log.Println("Loading theme...")
+
+	theme, err = LoadTheme()
 	log.MustFail(err)
 
 	log.Println("Loading root...")
