@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"errors"
 	"io/fs"
@@ -199,10 +200,20 @@ func writeFrontendHTML(name, markdownName string) error {
 	defer public.Remove(temporaryName)
 	defer file.Close()
 
-	writer := bufio.NewWriter(file)
+	var markdown bytes.Buffer
+
+	markdown.Grow(len(source))
+
 	document := frontendParser.Parse(source)
 
-	err = frontendRenderer.Render(writer, source, document)
+	err = frontendRenderer.Render(&markdown, source, document)
+	if err != nil {
+		return err
+	}
+
+	writer := bufio.NewWriter(file)
+
+	err = theme.Render(writer, markdown.Bytes())
 	if err != nil {
 		return err
 	}
