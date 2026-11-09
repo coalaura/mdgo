@@ -45,7 +45,7 @@ func LoaderWalkDirFS(root fs.FS, dir string, loader *jet.InMemLoader) error {
 
 			b, err := io.ReadAll(file)
 			if err != nil {
-				return nil
+				return err
 			}
 
 			loader.Set(path, string(b))
