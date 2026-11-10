@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"net/http"
-	"net/url"
 	"strings"
 )
 
@@ -40,21 +39,15 @@ func IsAuthenticated(next http.Handler) http.Handler {
 func RequiresAuthentication(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Context().Value(authKey) != true {
-			w.WriteHeader(http.StatusUnauthorized)
+			if wantsAdminJSON(r) {
+				writeAdminJSON(w, r, http.StatusUnauthorized, adminResponse{Redirect: "/-/login"})
+
+				return
+			}
+
+			http.Redirect(w, r, "/-/login", http.StatusSeeOther)
 
 			return
-		}
-
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			origin := r.Header.Get("Origin")
-			if origin != "" {
-				parsed, err := url.Parse(origin)
-				if err != nil || parsed.Host != r.Host {
-					w.WriteHeader(http.StatusForbidden)
-
-					return
-				}
-			}
 		}
 
 		next.ServeHTTP(w, r)

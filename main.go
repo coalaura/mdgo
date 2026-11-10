@@ -40,28 +40,10 @@ func main() {
 
 	log.Println("Preparing router...")
 
-	r := chi.NewRouter()
+	_, err = adminTemplate()
+	log.MustFail(err)
 
-	r.Use(log.Middleware())
-	r.Use(ThemeErrors)
-	r.Use(middleware.Recoverer)
-
-	r.Get("/*", HandleFrontend)
-	r.Head("/*", HandleFrontend)
-
-	r.Group(func(gr chi.Router) {
-		gr.Use(IsAuthenticated)
-
-		gr.Get("/-/login", HandleLogin)
-		gr.Post("/-/login", HandleLogin)
-		gr.Get("/-/logout", HandleLogout)
-		gr.Get("/-/admin", HandleAdmin)
-	})
-
-	r.Group(func(gr chi.Router) {
-		gr.Use(RequiresAuthentication)
-	})
-
+	r := NewRouter()
 	addr := config.Addr()
 
 	server := &http.Server{
@@ -93,4 +75,19 @@ func main() {
 	log.Warnln("Shutting down...")
 
 	server.Close()
+}
+
+func NewRouter() *chi.Mux {
+	router := chi.NewRouter()
+
+	router.Use(log.Middleware())
+	router.Use(ThemeErrors)
+	router.Use(middleware.Recoverer)
+
+	router.Get("/*", HandleFrontend)
+	router.Head("/*", HandleFrontend)
+
+	RegisterAdminRoutes(router)
+
+	return router
 }

@@ -11,10 +11,7 @@ import (
 	"path"
 	"strings"
 	"sync"
-	"time"
 )
-
-const assetRetention = 7 * 24 * time.Hour
 
 type assetBackup struct {
 	name     string
@@ -23,9 +20,8 @@ type assetBackup struct {
 }
 
 var (
-	siteMutex      sync.RWMutex
-	rebuildMutex   sync.Mutex
-	inheritedCache = true
+	siteMutex    sync.RWMutex
+	rebuildMutex sync.Mutex
 )
 
 func InitializeTheme() error {
@@ -46,7 +42,6 @@ func InitializeTheme() error {
 	}
 
 	theme = next
-	inheritedCache = true
 
 	return nil
 }
@@ -60,10 +55,10 @@ func ClearThemeCache() error {
 		return err
 	}
 
-	return activateTheme(next, time.Now())
+	return activateTheme(next)
 }
 
-func activateTheme(next *Theme, now time.Time) error {
+func activateTheme(next *Theme) error {
 	siteMutex.Lock()
 	defer siteMutex.Unlock()
 
@@ -72,30 +67,14 @@ func activateTheme(next *Theme, now time.Time) error {
 		return errors.Join(err, restoreAssets(public, backups))
 	}
 
-	previous := theme
-
-	if inheritedCache {
-		previous = nil
-	}
-
-	err = retireAssets(public, previous, next.catalogue, now)
-	if err == nil {
-		err = clearHTMLCache(public)
-	}
-
+	err = clearHTMLCache(public)
 	if err != nil {
 		return errors.Join(err, restoreAssets(public, backups))
 	}
 
 	theme = next
-	inheritedCache = false
 
-	err = pruneThemeAssets(public, next.catalogue, now)
-	if err != nil {
-		log.Warnln(err)
-	}
-
-	return nil
+	return pruneThemeAssets(public, next.catalogue)
 }
 
 func publishAssets(root *os.Root, catalogue *AssetCatalogue) ([]assetBackup, error) {
@@ -237,34 +216,17 @@ func isGeneratedHTML(root *os.Root, name string) (bool, error) {
 	return string(prefix[:]) == generatedHTMLMarker, err
 }
 
-func retireAssets(root *os.Root, previous *Theme, active *AssetCatalogue, now time.Time) error {
-	if previous != nil {
-		for name := range previous.catalogue.outputs {
-			if activeAsset(active, name) {
-				continue
-			}
-
-			err := root.Chtimes(name, now, now)
-			if err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return err
-			}
-		}
-
-		return nil
-	}
-
-	return walkManagedAssets(root, func(name string, info fs.FileInfo) error {
-		if activeAsset(active, name) || !info.Mode().IsRegular() || !fingerprintedAsset(name) {
+func pruneThemeAssets(root *os.Root, active *AssetCatalogue) error {
+	err := fs.WalkDir(root.FS(), assetOutputDirectory, func(name string, entry fs.DirEntry, walkErr error) error {
+		if errors.Is(walkErr, fs.ErrNotExist) && name == assetOutputDirectory {
 			return nil
 		}
 
-		return root.Chtimes(name, now, now)
-	})
-}
+		if walkErr != nil {
+			return walkErr
+		}
 
-func pruneThemeAssets(root *os.Root, active *AssetCatalogue, now time.Time) error {
-	err := walkManagedAssets(root, func(name string, info fs.FileInfo) error {
-		if activeAsset(active, name) || info.Mode().IsRegular() && fingerprintedAsset(name) && now.Sub(info.ModTime()) < assetRetention {
+		if entry.IsDir() || activeAsset(active, name) {
 			return nil
 		}
 
@@ -288,23 +250,6 @@ func activeAsset(catalogue *AssetCatalogue, name string) bool {
 	_, original := catalogue.originals[name]
 
 	return output || original
-}
-
-func fingerprintedAsset(name string) bool {
-	stem := strings.TrimSuffix(path.Base(name), path.Ext(name))
-	if len(stem) < 10 || stem[len(stem)-9] != '-' {
-		return false
-	}
-
-	hash := stem[len(stem)-8:]
-
-	for _, character := range hash {
-		if (character < 'A' || character > 'Z') && (character < '2' || character > '7') {
-			return false
-		}
-	}
-
-	return true
 }
 
 func pruneAssetDirectories(root *os.Root, directory string) error {
@@ -336,27 +281,4 @@ func pruneAssetDirectories(root *os.Root, directory string) error {
 	}
 
 	return nil
-}
-
-func walkManagedAssets(root *os.Root, visit func(string, fs.FileInfo) error) error {
-	return fs.WalkDir(root.FS(), assetOutputDirectory, func(name string, entry fs.DirEntry, walkErr error) error {
-		if errors.Is(walkErr, fs.ErrNotExist) && name == assetOutputDirectory {
-			return nil
-		}
-
-		if walkErr != nil {
-			return walkErr
-		}
-
-		if entry.IsDir() {
-			return nil
-		}
-
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-
-		return visit(name, info)
-	})
 }

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta name="color-scheme" content="light dark" />
+		<meta name="robots" content="noindex, nofollow" />
+
+		<title>{{ .Title }} - mdgo admin</title>
+
+		<link rel="stylesheet" href="/-/styles.css" />
+
+		<script src="/-/admin.js" defer></script>
+	</head>
+	<body>
+		<header class="site-header">
+			<a class="brand" href="/-/admin">mdgo <span>admin</span></a>
+
+			<nav aria-label="Admin navigation">
+				<a href="/">View site <span aria-hidden="true">&#8599;</span></a>
+
+				{{ if .Authenticated }}
+					<form method="post" action="/-/logout" data-async>
+						<input type="hidden" name="csrf" value="{{ .CSRF }}" />
+						<button class="quiet" type="submit">Sign out</button>
+					</form>
+				{{ end }}
+			</nav>
+		</header>
+
+		<div id="notification" class="notice{{ if .Error }} error{{ end }}" role="status" {{ if or (eq .View "error") (not (or .Error .Notice)) }}hidden{{ end }}>
+			{{ if ne .View "error" }}{{ or .Error .Notice }}{{ end }}
+		</div>
+
+		{{ if eq .View "login" }}
+			<main class="narrow">
+				<h1>Sign in</h1>
+				<form class="login-form" method="post" action="/-/login" data-async>
+					<label for="token">Admin token</label>
+					<input id="token" name="token" type="password" autocomplete="current-password" required maxlength="4096" autofocus />
+					<button type="submit">Sign in <span aria-hidden="true">&#8594;</span></button>
+				</form>
+			</main>
+		{{ else if eq .View "dashboard" }}
+			<main>
+				<div class="page-heading">
+					<div>
+						<h1>Pages</h1>
+					</div>
+
+					<form method="get" action="/-/admin" data-async>
+						<button class="quiet" type="submit">Refresh</button>
+					</form>
+				</div>
+
+				<dl class="stats" aria-label="Page statistics">
+					<div><dt>Pages</dt><dd id="page-count">{{ len .Pages }}</dd></div>
+					<div><dt>Cached</dt><dd id="cached-count">{{ .Cached }}</dd></div>
+					<div><dt>Not cached</dt><dd id="uncached-count">{{ .Uncached }}</dd></div>
+				</dl>
+
+				<section class="pages" aria-labelledby="pages-heading">
+					<div class="section-heading">
+						<h2 id="pages-heading">Markdown files</h2>
+					</div>
+
+					<div id="page-table" class="table-scroll" tabindex="0" role="region" aria-label="Markdown pages and cache status" {{ if not .Pages }}hidden{{ end }}>
+						<table>
+							<thead>
+								<tr>
+									<th scope="col">Markdown file</th>
+									<th scope="col">Cache status</th>
+									<th scope="col"><span class="visually-hidden">Actions</span></th>
+								</tr>
+							</thead>
+
+							<tbody id="page-rows">
+								{{ range .Pages }}
+									<tr data-page-path="{{ .Path }}">
+										<td><a class="page-link" href="{{ .URL }}">{{ .Path }}</a></td>
+										<td>{{ if .Cached }}<span class="status cached">Cached</span>{{ else }}<span class="status">Not cached</span>{{ end }}</td>
+										<td class="actions">
+											<form method="post" action="/-/cache/page" data-async>
+												<input type="hidden" name="csrf" value="{{ $.CSRF }}" />
+												<input type="hidden" name="path" value="{{ .Path }}" />
+												<button class="quiet" type="submit" data-page-clear data-cached="{{ .Cached }}" aria-label="Clear cache for {{ .Path }}" {{ if not .Cached }}disabled{{ end }}>Clear cache</button>
+											</form>
+										</td>
+									</tr>
+								{{ end }}
+							</tbody>
+						</table>
+					</div>
+
+					<div id="empty-state" class="empty-state" {{ if .Pages }}hidden{{ end }}>
+						<h3>No Markdown pages.</h3>
+					</div>
+				</section>
+
+				<section class="cache-panel" aria-labelledby="cache-heading">
+					<div>
+						<h2 id="cache-heading">Clear all caches</h2>
+						<p>Includes theme assets.</p>
+					</div>
+
+					<form method="post" action="/-/cache/all" data-async>
+						<input type="hidden" name="csrf" value="{{ .CSRF }}" />
+						<button type="submit">Clear all caches</button>
+					</form>
+				</section>
+			</main>
+		{{ else }}
+			<main class="narrow">
+				<p class="eyebrow">Site administration</p>
+
+				<h1>{{ .Title }}</h1>
+				<p class="intro" role="alert">{{ .Error }}</p>
+
+				{{ if .Authenticated }}
+					<a class="button" href="/-/admin">Back to dashboard</a>
+				{{ else }}
+					<a class="button" href="/-/login">Sign in</a>
+				{{ end }}
+			</main>
+		{{ end }}
+
+		<footer>
+			<a href="https://github.com/coalaura/mdgo">mdgo</a>
+			<span>&#169; <a href="https://github.com/coalaura">coalaura</a></span>
+		</footer>
+	</body>
+</html>

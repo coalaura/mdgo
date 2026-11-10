@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/CloudyKit/jet/v6"
@@ -111,6 +112,13 @@ func (t *Theme) RenderError(status int, pagePath string) (contents []byte, err e
 
 func ThemeErrors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Admin responses belong to the embedded UI, including login errors.
+		if r.URL.Path == "/-" || strings.HasPrefix(r.URL.Path, "/-/") {
+			next.ServeHTTP(w, r)
+
+			return
+		}
+
 		writer := &themeErrorWriter{ResponseWriter: w}
 
 		next.ServeHTTP(writer, r)
