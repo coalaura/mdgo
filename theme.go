@@ -18,6 +18,11 @@ type Theme struct {
 	catalogue   *AssetCatalogue
 }
 
+type themeBuild struct {
+	theme  *Theme
+	assets *assetBuild
+}
+
 var (
 	//go:embed themes/default
 	ThemeDefaultFS embed.FS
@@ -27,7 +32,7 @@ func (t *Theme) Render(wr io.Writer, markdown []byte, meta Metadata) error {
 	return t.layout.Execute(wr, nil, NewThemeData(markdown, meta))
 }
 
-func LoadTheme() (*Theme, error) {
+func LoadTheme() (*themeBuild, error) {
 	if config.Theme.Name == "default" {
 		root, err := fs.Sub(ThemeDefaultFS, "themes/default")
 		if err != nil {
@@ -62,7 +67,7 @@ func LoadTheme() (*Theme, error) {
 	return LoadThemeFromFS(root.FS(), config.Theme.Assets)
 }
 
-func LoadThemeFromFS(root fs.FS, options ConfigAssets) (*Theme, error) {
+func LoadThemeFromFS(root fs.FS, options ConfigAssets) (*themeBuild, error) {
 	loader, err := NewLoaderFromFS(root)
 	if err != nil {
 		return nil, err
@@ -87,12 +92,12 @@ func LoadThemeFromFS(root fs.FS, options ConfigAssets) (*Theme, error) {
 		return nil, err
 	}
 
-	catalogue, err := BuildThemeAssets(assets, options)
+	built, err := BuildThemeAssets(assets, options)
 	if err != nil {
 		return nil, err
 	}
 
-	_, err = catalogue.RewriteHTML(rendered.Bytes(), "/")
+	_, err = built.catalogue.RewriteHTML(rendered.Bytes(), "/")
 	if err != nil {
 		return nil, err
 	}
@@ -111,10 +116,13 @@ func LoadThemeFromFS(root fs.FS, options ConfigAssets) (*Theme, error) {
 		errorLayout = nil
 	}
 
-	return &Theme{
-		layout:      layout,
-		errorLayout: errorLayout,
-		catalogue:   catalogue,
+	return &themeBuild{
+		theme: &Theme{
+			layout:      layout,
+			errorLayout: errorLayout,
+			catalogue:   built.catalogue,
+		},
+		assets: built,
 	}, nil
 }
 

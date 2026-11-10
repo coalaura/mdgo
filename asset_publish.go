@@ -36,12 +36,12 @@ func InitializeTheme() error {
 	siteMutex.Lock()
 	defer siteMutex.Unlock()
 
-	backups, err := publishAssets(public, next.catalogue)
+	backups, err := publishAssets(public, next.assets)
 	if err != nil {
 		return errors.Join(err, restoreAssets(public, backups))
 	}
 
-	theme = next
+	theme = next.theme
 
 	return nil
 }
@@ -58,11 +58,11 @@ func ClearThemeCache() error {
 	return activateTheme(next)
 }
 
-func activateTheme(next *Theme) error {
+func activateTheme(next *themeBuild) error {
 	siteMutex.Lock()
 	defer siteMutex.Unlock()
 
-	backups, err := publishAssets(public, next.catalogue)
+	backups, err := publishAssets(public, next.assets)
 	if err != nil {
 		return errors.Join(err, restoreAssets(public, backups))
 	}
@@ -72,22 +72,22 @@ func activateTheme(next *Theme) error {
 		return errors.Join(err, restoreAssets(public, backups))
 	}
 
-	theme = next
+	theme = next.theme
 
-	return pruneThemeAssets(public, next.catalogue)
+	return pruneThemeAssets(public, next.theme.catalogue)
 }
 
-func publishAssets(root *os.Root, catalogue *AssetCatalogue) ([]assetBackup, error) {
-	backups := make([]assetBackup, 0, len(catalogue.originals))
+func publishAssets(root *os.Root, build *assetBuild) ([]assetBackup, error) {
+	backups := make([]assetBackup, 0, len(build.originals))
 
-	for name, contents := range catalogue.outputs {
+	for name, contents := range build.outputs {
 		err := writeAsset(root, name, contents)
 		if err != nil {
 			return backups, err
 		}
 	}
 
-	for name, contents := range catalogue.originals {
+	for name, contents := range build.originals {
 		previous, err := root.ReadFile(name)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return backups, err

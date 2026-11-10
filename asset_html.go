@@ -2,9 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"crypto/sha512"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -105,9 +102,7 @@ func (c *AssetCatalogue) RewriteHTML(source []byte, pagePath string) ([]byte, er
 			}
 
 			if entry.css != "" {
-				contents := c.outputs[entry.css]
-
-				digest := sha256.Sum256(contents)
+				digest := c.outputs[entry.css].sha256
 				if !styles[digest] {
 					link := html.Token{
 						Type: html.StartTagToken,
@@ -140,8 +135,8 @@ func (c *AssetCatalogue) RewriteHTML(source []byte, pagePath string) ([]byte, er
 	}
 }
 
-func (c *AssetCatalogue) linkedStyles(source []byte, base *url.URL) map[[32]byte]bool {
-	styles := make(map[[32]byte]bool)
+func (c *AssetCatalogue) linkedStyles(source []byte, base *url.URL) map[string]bool {
+	styles := make(map[string]bool)
 	tokenizer := html.NewTokenizer(bytes.NewReader(source))
 
 	for {
@@ -181,9 +176,9 @@ func (c *AssetCatalogue) linkedStyles(source []byte, base *url.URL) map[[32]byte
 			name = entry.output
 		}
 
-		contents, exists := c.outputs[name]
-		if exists {
-			styles[sha256.Sum256(contents)] = true
+		digests, exists := c.outputs[name]
+		if exists && digests.sha256 != "" {
+			styles[digests.sha256] = true
 		}
 	}
 }
@@ -331,24 +326,21 @@ func replaceHTMLWord(value, oldWord, newWord string) string {
 	return result.String()
 }
 
-func assetIntegrity(contents []byte, previous string) string {
+func assetIntegrity(digests assetDigests, previous string) string {
 	var result strings.Builder
 
 	for field := range strings.FieldsSeq(previous) {
 		algorithm, _, _ := strings.Cut(field, "-")
 
-		var digest []byte
+		var digest string
 
 		switch algorithm {
 		case "sha256":
-			sum := sha256.Sum256(contents)
-			digest = sum[:]
+			digest = digests.sha256
 		case "sha384":
-			sum := sha512.Sum384(contents)
-			digest = sum[:]
+			digest = digests.sha384
 		case "sha512":
-			sum := sha512.Sum512(contents)
-			digest = sum[:]
+			digest = digests.sha512
 		default:
 			continue
 		}
@@ -357,15 +349,11 @@ func assetIntegrity(contents []byte, previous string) string {
 			result.WriteByte(' ')
 		}
 
-		result.WriteString(algorithm)
-		result.WriteByte('-')
-		result.WriteString(base64.StdEncoding.EncodeToString(digest))
+		result.WriteString(digest)
 	}
 
 	if result.Len() == 0 {
-		sum := sha512.Sum384(contents)
-
-		return "sha384-" + base64.StdEncoding.EncodeToString(sum[:])
+		return digests.sha384
 	}
 
 	return result.String()

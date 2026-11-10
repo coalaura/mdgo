@@ -20,6 +20,13 @@ const (
 	generatedHTMLMarker = "<!-- mdgo:cached-page -->\n"
 )
 
+type frontendResponse struct {
+	name     string
+	file     *os.File
+	info     fs.FileInfo
+	redirect string
+}
+
 var frontendLocks = lock.NewLockMap[string]()
 
 func LoadPublicRoot() (*os.Root, error) {
@@ -32,6 +39,27 @@ func LoadPublicRoot() (*os.Root, error) {
 }
 
 func HandleFrontend(w http.ResponseWriter, r *http.Request) {
+	response, err := prepareFrontendResponse(r)
+	if err != nil {
+		writeFrontendError(w, r, err)
+
+		return
+	}
+
+	if response.redirect != "" {
+		http.Redirect(w, r, response.redirect, http.StatusMovedPermanently)
+
+		return
+	}
+
+	defer response.file.Close()
+
+	http.ServeContent(w, r, response.name, response.info.ModTime(), response.file)
+}
+
+// Keep cache lookup and publication inside the invalidation barrier. The opened
+// file belongs to the response after unlocking, even if a clear removes its path.
+func prepareFrontendResponse(r *http.Request) (frontendResponse, error) {
 	siteMutex.RLock()
 	defer siteMutex.RUnlock()
 
@@ -41,9 +69,7 @@ func HandleFrontend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !fs.ValidPath(name) || strings.ContainsAny(name, "\\:") {
-		http.NotFound(w, r)
-
-		return
+		return frontendResponse{}, fs.ErrNotExist
 	}
 
 	directory, assetName, _ := strings.Cut(name, "/")
@@ -52,14 +78,13 @@ func HandleFrontend(w http.ResponseWriter, r *http.Request) {
 	if isAsset {
 		assetName, _, _ = strings.Cut(assetName, "/")
 		if strings.EqualFold(strings.TrimRight(assetName, ". "), ".manifest") {
-			http.NotFound(w, r)
-
-			return
+			return frontendResponse{}, fs.ErrNotExist
 		}
 	}
 
-	if handleFrontendRedirect(w, r, name) {
-		return
+	redirect, err := frontendRedirect(r, name)
+	if err != nil || redirect != "" {
+		return frontendResponse{redirect: redirect}, err
 	}
 
 	file, info, err := openFrontendFile(name)
@@ -70,9 +95,7 @@ func HandleFrontend(w http.ResponseWriter, r *http.Request) {
 			ForceQuery: r.URL.ForceQuery,
 		}
 
-		http.Redirect(w, r, target.RequestURI(), http.StatusMovedPermanently)
-
-		return
+		return frontendResponse{redirect: target.RequestURI()}, nil
 	} else if errors.Is(err, fs.ErrNotExist) && !strings.HasSuffix(name, ".html") {
 		name += ".html"
 
@@ -84,17 +107,13 @@ func HandleFrontend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		writeFrontendError(w, r, err)
-
-		return
+		return frontendResponse{}, err
 	}
 
-	defer file.Close()
-
-	http.ServeContent(w, r, name, info.ModTime(), file)
+	return frontendResponse{name: name, file: file, info: info}, nil
 }
 
-func handleFrontendRedirect(w http.ResponseWriter, r *http.Request, name string) bool {
+func frontendRedirect(r *http.Request, name string) (string, error) {
 	extension := path.Ext(name)
 
 	isMarkdown := strings.EqualFold(extension, ".md")
@@ -110,7 +129,7 @@ func handleFrontendRedirect(w http.ResponseWriter, r *http.Request, name string)
 	if redirectIndex {
 		targetPath = strings.TrimSuffix(targetPath, "index")
 	} else if !isMarkdown && (!isHTML || !config.Frontend.RedirectHTML) {
-		return false
+		return "", nil
 	}
 
 	info, err := public.Stat(name)
@@ -127,15 +146,11 @@ func handleFrontendRedirect(w http.ResponseWriter, r *http.Request, name string)
 	}
 
 	if err != nil {
-		writeFrontendError(w, r, err)
-
-		return true
+		return "", err
 	}
 
 	if !info.Mode().IsRegular() {
-		http.NotFound(w, r)
-
-		return true
+		return "", fs.ErrNotExist
 	}
 
 	target := url.URL{Path: targetPath}
@@ -145,9 +160,7 @@ func handleFrontendRedirect(w http.ResponseWriter, r *http.Request, name string)
 		location += "?" + r.URL.RawQuery
 	}
 
-	http.Redirect(w, r, location, http.StatusMovedPermanently)
-
-	return true
+	return location, nil
 }
 
 func openFrontendFile(name string) (*os.File, fs.FileInfo, error) {

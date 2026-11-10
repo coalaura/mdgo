@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -18,8 +21,21 @@ const assetOutputDirectory = "assets"
 type AssetCatalogue struct {
 	entries   map[string]assetEntry
 	scripts   map[string]bool
+	outputs   map[string]assetDigests
+	originals map[string]struct{}
+}
+
+// Payloads belong only to the build/publication operation, never the active theme.
+type assetBuild struct {
+	catalogue *AssetCatalogue
 	outputs   map[string][]byte
 	originals map[string][]byte
+}
+
+type assetDigests struct {
+	sha256 string
+	sha384 string
+	sha512 string
 }
 
 type assetEntry struct {
@@ -46,7 +62,7 @@ type assetImport struct {
 	Path string `json:"path"`
 }
 
-func BuildThemeAssets(source fs.FS, options ConfigAssets) (*AssetCatalogue, error) {
+func BuildThemeAssets(source fs.FS, options ConfigAssets) (*assetBuild, error) {
 	err := options.Validate()
 	if err != nil {
 		return nil, err
@@ -60,6 +76,11 @@ func BuildThemeAssets(source fs.FS, options ConfigAssets) (*AssetCatalogue, erro
 	catalogue := &AssetCatalogue{
 		entries:   make(map[string]assetEntry, len(files)),
 		scripts:   make(map[string]bool, len(files)),
+		outputs:   make(map[string]assetDigests, len(files)),
+		originals: make(map[string]struct{}, len(files)),
+	}
+	build := &assetBuild{
+		catalogue: catalogue,
 		outputs:   make(map[string][]byte, len(files)),
 		originals: make(map[string][]byte, len(files)),
 	}
@@ -79,31 +100,33 @@ func BuildThemeAssets(source fs.FS, options ConfigAssets) (*AssetCatalogue, erro
 				continue
 			}
 		} else if extension != ".css" {
-			catalogue.originals[path.Join("assets", name)] = contents
+			original := path.Join("assets", name)
+			build.originals[original] = contents
+			catalogue.originals[original] = struct{}{}
 
 			continue
 		}
 
-		err = buildAsset(catalogue, files, name, options)
+		err = buildAsset(build, files, name, options)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	for _, name := range options.Entrypoints {
-		err = buildAsset(catalogue, files, name, options)
+		err = buildAsset(build, files, name, options)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	for name, contents := range catalogue.originals {
-		if output, exists := catalogue.outputs[name]; exists && !bytes.Equal(contents, output) {
+	for name, contents := range build.originals {
+		if output, exists := build.outputs[name]; exists && !bytes.Equal(contents, output) {
 			return nil, fmt.Errorf("theme resource %q conflicts with a generated output; rename the source resource", name)
 		}
 	}
 
-	return catalogue, nil
+	return build, nil
 }
 
 func readThemeAssets(source fs.FS) (map[string][]byte, error) {
@@ -147,9 +170,11 @@ func readThemeAssets(source fs.FS) (map[string][]byte, error) {
 	return files, err
 }
 
-func buildAsset(catalogue *AssetCatalogue, files map[string][]byte, name string, settings ConfigAssets) error {
+func buildAsset(build *assetBuild, files map[string][]byte, name string, settings ConfigAssets) error {
 	isCSS := path.Ext(name) == ".css"
 	compile := settings.Compile || isCSS
+	classic := !compile && path.Ext(name) == ".js"
+	catalogue := build.catalogue
 
 	workingDirectory, err := filepath.Abs(".")
 	if err != nil {
@@ -182,7 +207,17 @@ func buildAsset(catalogue *AssetCatalogue, files map[string][]byte, name string,
 			"unsupported-dynamic-import":   api.LogLevelError,
 			"require-resolve-not-external": api.LogLevelError,
 		},
-		Plugins: []api.Plugin{themeAssetPlugin(files, compile)},
+		Plugins: []api.Plugin{themeAssetPlugin(files, compile, classic)},
+	}
+
+	if classic {
+		// Classic scripts may share globals or contain guarded UMD branches.
+		// Probe browser branches without the CommonJS bindings bundling invents.
+		// None of these definitions apply to the published classic script.
+		options.Define = map[string]string{"module": "undefined", "exports": "undefined", "require": "undefined"}
+		options.LogOverride["indirect-require"] = api.LogLevelSilent
+		options.LogOverride["unsupported-require-call"] = api.LogLevelSilent
+		options.LogOverride["require-resolve-not-external"] = api.LogLevelSilent
 	}
 
 	result := api.Build(options)
@@ -201,7 +236,7 @@ func buildAsset(catalogue *AssetCatalogue, files map[string][]byte, name string,
 
 	if !compile {
 		input := metadata.Inputs["theme:"+name]
-		if input.Format == "cjs" || input.Format == "esm" && path.Ext(name) == ".js" {
+		if input.Format == "cjs" && !classic || input.Format == "esm" && classic {
 			return fmt.Errorf("theme script %q uses module syntax: enable theme.assets.compile and declare its entrypoint (or use .mjs for a self-contained ES module)", name)
 		}
 	}
@@ -209,6 +244,7 @@ func buildAsset(catalogue *AssetCatalogue, files map[string][]byte, name string,
 	if !compile {
 		options.Bundle = false
 		options.Format = api.FormatIIFE
+		options.Define = nil
 
 		if path.Ext(name) == ".js" {
 			options.Format = api.FormatDefault
@@ -230,7 +266,7 @@ func buildAsset(catalogue *AssetCatalogue, files map[string][]byte, name string,
 	}
 
 	for _, output := range result.OutputFiles {
-		if strings.HasSuffix(output.Path, ".js") {
+		if !classic && strings.HasSuffix(output.Path, ".js") {
 			err = validateBrowserScript(name, output.Contents)
 			if err != nil {
 				return err
@@ -243,11 +279,22 @@ func buildAsset(catalogue *AssetCatalogue, files map[string][]byte, name string,
 		}
 
 		outputName := filepath.ToSlash(relative)
-		if previous, exists := catalogue.outputs[outputName]; exists && !bytes.Equal(previous, output.Contents) {
-			return fmt.Errorf("theme output %q conflicts with another generated asset", outputName)
+		if previous, exists := build.outputs[outputName]; exists {
+			if !bytes.Equal(previous, output.Contents) {
+				return fmt.Errorf("theme output %q conflicts with another generated asset", outputName)
+			}
+
+			continue
 		}
 
-		catalogue.outputs[outputName] = output.Contents
+		build.outputs[outputName] = output.Contents
+		digests := assetDigests{}
+
+		if strings.HasSuffix(outputName, ".js") || strings.HasSuffix(outputName, ".css") {
+			digests = digestAsset(output.Contents)
+		}
+
+		catalogue.outputs[outputName] = digests
 	}
 
 	for outputName, output := range metadata.Outputs {
@@ -267,7 +314,8 @@ func buildAsset(catalogue *AssetCatalogue, files map[string][]byte, name string,
 
 // Use esbuild's symbol resolution to detect surviving global require references,
 // including computed property access and helpers that esbuild cannot bundle.
-// This probe is discarded; it never changes the published script or its scope.
+// Only isolated IIFE outputs use this probe. Bundling a classic script here
+// would invent CommonJS bindings and make guarded UMD branches look mandatory.
 func validateBrowserScript(name string, contents []byte) error {
 	result := api.Build(api.BuildOptions{
 		Stdin:       &api.StdinOptions{Contents: string(contents), Sourcefile: name},
@@ -315,11 +363,15 @@ func validateBrowserScript(name string, contents []byte) error {
 	return nil
 }
 
-func themeAssetPlugin(files map[string][]byte, compile bool) api.Plugin {
+func themeAssetPlugin(files map[string][]byte, compile, classic bool) api.Plugin {
 	return api.Plugin{
 		Name: "theme-assets",
 		Setup: func(build api.PluginBuild) {
 			build.OnResolve(api.OnResolveOptions{Filter: ".*"}, func(args api.OnResolveArgs) (api.OnResolveResult, error) {
+				if classic && (args.Kind == api.ResolveJSRequireCall || args.Kind == api.ResolveJSRequireResolve) {
+					return api.OnResolveResult{Path: args.Path, External: true}, nil
+				}
+
 				if args.Kind == api.ResolveJSRequireResolve {
 					return api.OnResolveResult{}, fmt.Errorf("%q: require.resolve is unsupported in browser assets; use a static import", args.Importer)
 				}
@@ -410,4 +462,16 @@ func assetBuildError(name string, result api.BuildResult) error {
 	messages := api.FormatMessages(result.Errors, api.FormatMessagesOptions{Kind: api.ErrorMessage, Color: false})
 
 	return fmt.Errorf("build theme asset %q: %s", name, strings.Join(messages, "\n"))
+}
+
+func digestAsset(contents []byte) assetDigests {
+	sha256Sum := sha256.Sum256(contents)
+	sha384Sum := sha512.Sum384(contents)
+	sha512Sum := sha512.Sum512(contents)
+
+	return assetDigests{
+		sha256: "sha256-" + base64.StdEncoding.EncodeToString(sha256Sum[:]),
+		sha384: "sha384-" + base64.StdEncoding.EncodeToString(sha384Sum[:]),
+		sha512: "sha512-" + base64.StdEncoding.EncodeToString(sha512Sum[:]),
+	}
 }
