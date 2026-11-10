@@ -13,17 +13,11 @@ import (
 	"strings"
 
 	"github.com/coalaura/lock"
-	"github.com/yuin/goldmark/v2/parser"
-	"github.com/yuin/goldmark/v2/renderer/html"
 )
 
 const PublicDirectory = "public"
 
-var (
-	frontendLocks    = lock.NewLockMap[string]()
-	frontendParser   = parser.New()
-	frontendRenderer = html.New(html.WithUnsafe())
-)
+var frontendLocks = lock.NewLockMap[string]()
 
 func LoadPublicRoot() (*os.Root, error) {
 	_, err := os.Stat(PublicDirectory)
