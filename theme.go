@@ -13,8 +13,9 @@ import (
 )
 
 type Theme struct {
-	layout    *jet.Template
-	catalogue *AssetCatalogue
+	layout      *jet.Template
+	errorLayout *jet.Template
+	catalogue   *AssetCatalogue
 }
 
 var (
@@ -96,9 +97,24 @@ func LoadThemeFromFS(root fs.FS, options ConfigAssets) (*Theme, error) {
 		return nil, err
 	}
 
+	_, err = defaultErrorTemplate()
+	if err != nil {
+		log.Warnln(fmt.Errorf("load default error.html: %w", err))
+	}
+
+	errorLayout, err := templates.GetTemplate("error.html")
+	if err != nil {
+		if loader.Exists("error.html") {
+			log.Warnln(fmt.Errorf("load theme error.html: %w", err))
+		}
+
+		errorLayout = nil
+	}
+
 	return &Theme{
-		layout:    layout,
-		catalogue: catalogue,
+		layout:      layout,
+		errorLayout: errorLayout,
+		catalogue:   catalogue,
 	}, nil
 }
 

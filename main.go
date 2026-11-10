@@ -42,8 +42,9 @@ func main() {
 
 	r := chi.NewRouter()
 
-	r.Use(middleware.Recoverer)
 	r.Use(log.Middleware())
+	r.Use(ThemeErrors)
+	r.Use(middleware.Recoverer)
 
 	r.Get("/*", HandleFrontend)
 	r.Head("/*", HandleFrontend)

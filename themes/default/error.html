@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta name="color-scheme" content="light dark" />
+		<title>{{ .status }} - {{ .message }} - mdgo</title>
+		<style>
+			*,
+			*::before,
+			*::after {
+				box-sizing: border-box;
+			}
+
+			:root {
+				color-scheme: light dark;
+				--background: #fafafa;
+				--foreground: #262626;
+				--page-border: #eaeaea;
+				--muted: #626262;
+			}
+
+			body {
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				min-height: 100svh;
+				margin: 0;
+				border: 12px solid var(--page-border);
+				padding: clamp(1.5rem, 6vw, 4rem);
+				background: var(--background);
+				color: var(--foreground);
+				font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+				font-size: 1rem;
+				line-height: 1.7;
+			}
+
+			main {
+				width: min(100%, 38rem);
+				padding-block: 2rem;
+				overflow-wrap: anywhere;
+			}
+
+			h1 {
+				margin: 0 0 1rem;
+				font-size: clamp(2rem, 6vw, 3.5rem);
+				font-weight: 600;
+				letter-spacing: -0.04em;
+				line-height: 1.15;
+			}
+
+			p {
+				max-width: 34rem;
+				margin: 0 0 2rem;
+				color: var(--muted);
+			}
+
+			.error-code {
+				margin-bottom: 1rem;
+				font-size: 0.8rem;
+				font-weight: 600;
+				letter-spacing: 0.12em;
+				text-transform: uppercase;
+			}
+
+			.home-link {
+				display: inline-flex;
+				align-items: center;
+				gap: 0.5rem;
+				min-height: 44px;
+				border: 1px solid var(--foreground);
+				border-radius: 2px;
+				padding: 0.375rem 0.75rem;
+				background: var(--foreground);
+				color: var(--background);
+				font-weight: 600;
+				text-decoration: none;
+				transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
+			}
+
+			.home-link:hover {
+				border-color: var(--muted);
+				background: var(--muted);
+			}
+
+			.home-link:focus-visible {
+				outline: 2px solid var(--foreground);
+				outline-offset: 4px;
+			}
+
+			@media (prefers-color-scheme: dark) {
+				:root {
+					--background: #1d1d1d;
+					--foreground: #ffffff;
+					--page-border: #111111;
+					--muted: #a3a3a3;
+				}
+			}
+
+			@media (max-width: 40rem) {
+				body {
+					border-width: 6px;
+				}
+			}
+
+			@media (prefers-reduced-motion: reduce) {
+				.home-link {
+					transition: none;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<p class="error-code">Error {{ .status }}</p>
+			<h1>{{ .message != "" ? .message : "Request failed" }}</h1>
+			<p>
+				{{ if .status == 404 }}
+					The page you're looking for may have moved, or the address may be incorrect.
+				{{ else if .status == 401 }}
+					You need to sign in before you can view this page.
+				{{ else if .status == 403 }}
+					You don't have permission to view this page.
+				{{ else if .status == 429 }}
+					Please wait a moment before trying again.
+				{{ else if .status >= 500 }}
+					We couldn't load this page. Please try again in a little while.
+				{{ else }}
+					We couldn't complete this request. You can return home and try again from there.
+				{{ end }}
+			</p>
+			<a class="home-link" href="/">Return home <span aria-hidden="true">&#8594;</span></a>
+		</main>
+	</body>
+</html>
