@@ -46,6 +46,18 @@ func HandleFrontend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	directory, assetName, _ := strings.Cut(name, "/")
+
+	isAsset := strings.EqualFold(strings.TrimRight(directory, ". "), "assets")
+	if isAsset {
+		assetName, _, _ = strings.Cut(assetName, "/")
+		if strings.EqualFold(strings.TrimRight(assetName, ". "), ".manifest") {
+			http.NotFound(w, r)
+
+			return
+		}
+	}
+
 	if handleFrontendRedirect(w, r, name) {
 		return
 	}
