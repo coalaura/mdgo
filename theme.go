@@ -1,8 +1,8 @@
 package main
 
 import (
+	"bytes"
 	"embed"
-	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -13,8 +13,8 @@ import (
 )
 
 type Theme struct {
-	layout *jet.Template
-	assets fs.FS
+	layout    *jet.Template
+	catalogue *AssetCatalogue
 }
 
 var (
@@ -27,13 +27,13 @@ func (t *Theme) Render(wr io.Writer, markdown []byte, meta Metadata) error {
 }
 
 func LoadTheme() (*Theme, error) {
-	if config.Server.Theme == "" || config.Server.Theme == "default" {
+	if config.Theme.Name == "default" {
 		root, err := fs.Sub(ThemeDefaultFS, "themes/default")
 		if err != nil {
 			return nil, err
 		}
 
-		return LoadThemeFromFS(root)
+		return LoadThemeFromFS(root, config.Theme.Assets)
 	}
 
 	themes, err := os.OpenRoot("themes")
@@ -45,19 +45,23 @@ func LoadTheme() (*Theme, error) {
 		return nil, err
 	}
 
-	root, err := themes.OpenRoot(config.Server.Theme)
+	defer themes.Close()
+
+	root, err := themes.OpenRoot(config.Theme.Name)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("theme %q does not exist", config.Server.Theme)
+			return nil, fmt.Errorf("theme %q does not exist", config.Theme.Name)
 		}
 
 		return nil, err
 	}
 
-	return LoadThemeFromFS(root.FS())
+	defer root.Close()
+
+	return LoadThemeFromFS(root.FS(), config.Theme.Assets)
 }
 
-func LoadThemeFromFS(root fs.FS) (*Theme, error) {
+func LoadThemeFromFS(root fs.FS, options ConfigAssets) (*Theme, error) {
 	loader, err := NewLoaderFromFS(root)
 	if err != nil {
 		return nil, err
@@ -70,7 +74,9 @@ func LoadThemeFromFS(root fs.FS) (*Theme, error) {
 		return nil, err
 	}
 
-	err = layout.Execute(io.Discard, nil, NewThemeData(nil, nil))
+	var rendered bytes.Buffer
+
+	err = layout.Execute(&rendered, nil, NewThemeData(nil, nil))
 	if err != nil {
 		return nil, err
 	}
@@ -80,14 +86,24 @@ func LoadThemeFromFS(root fs.FS) (*Theme, error) {
 		return nil, err
 	}
 
+	catalogue, err := BuildThemeAssets(assets, options)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = catalogue.RewriteHTML(rendered.Bytes(), "/")
+	if err != nil {
+		return nil, err
+	}
+
 	return &Theme{
-		layout: layout,
-		assets: assets,
+		layout:    layout,
+		catalogue: catalogue,
 	}, nil
 }
 
 func LoadThemeAssets(root fs.FS) (fs.FS, error) {
-	info, err := fs.Stat(root, "assets")
+	info, err := fs.Lstat(root, "assets")
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}

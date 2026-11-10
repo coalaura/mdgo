@@ -28,19 +28,14 @@ func main() {
 	config, err = LoadConfig()
 	log.MustFail(err)
 
-	log.Println("Loading theme...")
-
-	theme, err = LoadTheme()
-	log.MustFail(err)
-
 	log.Println("Loading root...")
 
 	public, err = LoadPublicRoot()
 	log.MustFail(err)
 
-	log.Println("Syncing theme assets...")
+	log.Println("Building theme assets...")
 
-	err = SyncAssets()
+	err = InitializeTheme()
 	log.MustFail(err)
 
 	log.Println("Preparing router...")

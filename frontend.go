@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/rand"
 	"errors"
@@ -15,7 +14,11 @@ import (
 	"github.com/coalaura/lock"
 )
 
-const PublicDirectory = "public"
+const (
+	PublicDirectory = "public"
+
+	generatedHTMLMarker = "<!-- mdgo:cached-page -->\n"
+)
 
 var frontendLocks = lock.NewLockMap[string]()
 
@@ -29,6 +32,9 @@ func LoadPublicRoot() (*os.Root, error) {
 }
 
 func HandleFrontend(w http.ResponseWriter, r *http.Request) {
+	siteMutex.RLock()
+	defer siteMutex.RUnlock()
+
 	name := strings.TrimPrefix(r.URL.Path, "/")
 	if name == "" || strings.HasSuffix(name, "/") {
 		name += "index"
@@ -74,7 +80,7 @@ func HandleFrontend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if errors.Is(err, fs.ErrNotExist) {
-		file, info, err = renderFrontendFile(name)
+		file, info, err = renderFrontendFile(name, r.URL.EscapedPath())
 	}
 
 	if err != nil {
@@ -166,7 +172,7 @@ func openFrontendFile(name string) (*os.File, fs.FileInfo, error) {
 	return file, info, nil
 }
 
-func renderFrontendFile(name string) (*os.File, fs.FileInfo, error) {
+func renderFrontendFile(name, pagePath string) (*os.File, fs.FileInfo, error) {
 	markdownName := strings.TrimSuffix(name, ".html") + ".md"
 
 	_, err := public.Stat(markdownName)
@@ -182,7 +188,7 @@ func renderFrontendFile(name string) (*os.File, fs.FileInfo, error) {
 		return file, info, err
 	}
 
-	err = writeFrontendHTML(name, markdownName)
+	err = writeFrontendHTML(name, markdownName, pagePath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -190,7 +196,7 @@ func renderFrontendFile(name string) (*os.File, fs.FileInfo, error) {
 	return openFrontendFile(name)
 }
 
-func writeFrontendHTML(name, markdownName string) error {
+func writeFrontendHTML(name, markdownName, pagePath string) error {
 	source, err := public.ReadFile(markdownName)
 	if err != nil {
 		return err
@@ -222,14 +228,24 @@ func writeFrontendHTML(name, markdownName string) error {
 		return err
 	}
 
-	writer := bufio.NewWriter(file)
+	var rendered bytes.Buffer
 
-	err = theme.Render(writer, markdown.Bytes(), meta)
+	err = theme.Render(&rendered, markdown.Bytes(), meta)
 	if err != nil {
 		return err
 	}
 
-	err = writer.Flush()
+	completed, err := theme.catalogue.RewriteHTML(rendered.Bytes(), pagePath)
+	if err != nil {
+		return err
+	}
+
+	_, err = file.WriteString(generatedHTMLMarker)
+	if err != nil {
+		return err
+	}
+
+	_, err = file.Write(completed)
 	if err != nil {
 		return err
 	}

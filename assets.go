@@ -1,202 +1,116 @@
 package main
 
 import (
-	"crypto/rand"
-	"errors"
+	"bytes"
+	"encoding/json"
 	"fmt"
-	"hash"
-	"hash/fnv"
-	"io"
 	"io/fs"
-	"os"
 	"path"
+	"path/filepath"
+	"strings"
+
+	"github.com/evanw/esbuild/pkg/api"
 )
 
-type AssetSyncer struct {
-	root     *os.Root
-	source   fs.FS
-	manifest *Manifest
-	digest   hash.Hash64
-	buffer   []byte
+const assetOutputDirectory = "assets"
+
+// A catalogue is private to a completed build and immutable after publication.
+type AssetCatalogue struct {
+	entries   map[string]assetEntry
+	scripts   map[string]bool
+	outputs   map[string][]byte
+	originals map[string][]byte
 }
 
-func (s *AssetSyncer) syncFile(name string, info fs.FileInfo) (ManifestEntry, error) {
-	entry := ManifestEntry{
-		Name: name,
-		Size: info.Size(),
-	}
-
-	modTime := info.ModTime()
-	if !modTime.IsZero() {
-		entry.ModTimeNS = modTime.UnixNano()
-	}
-
-	_, err := s.root.Lstat(name)
-	exists := err == nil
-
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return entry, err
-	}
-
-	previous, tracked := s.manifest.Get(name)
-	if exists && tracked && previous.MatchesMetadata(info) {
-		return previous, nil
-	}
-
-	if exists && tracked && previous.Size == entry.Size {
-		entry.Hash, err = s.hashFile(name)
-		if err != nil {
-			return entry, err
-		}
-
-		if entry.Hash == previous.Hash {
-			return entry, nil
-		}
-	}
-
-	err = s.root.MkdirAll(path.Dir(name), 0755)
-	if err != nil {
-		return entry, err
-	}
-
-	entry.Hash, err = s.copyFile(name)
-	return entry, err
+type assetEntry struct {
+	output string
+	css    string
 }
 
-func (s *AssetSyncer) hashFile(name string) (uint64, error) {
-	file, err := s.source.Open(name)
-	if err != nil {
-		return 0, err
-	}
-
-	defer file.Close()
-
-	s.digest.Reset()
-
-	_, err = io.CopyBuffer(s.digest, file, s.buffer)
-	return s.digest.Sum64(), err
+type assetMetadata struct {
+	Inputs  map[string]assetInput  `json:"inputs"`
+	Outputs map[string]assetOutput `json:"outputs"`
 }
 
-func (s *AssetSyncer) copyFile(name string) (uint64, error) {
-	source, err := s.source.Open(name)
-	if err != nil {
-		return 0, err
-	}
-
-	defer source.Close()
-
-	temporaryName := path.Join(path.Dir(name), ".mdgo-"+rand.Text()+".tmp")
-
-	destination, err := s.root.OpenFile(temporaryName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
-	if err != nil {
-		return 0, err
-	}
-
-	defer s.root.Remove(temporaryName)
-	defer destination.Close()
-
-	s.digest.Reset()
-
-	writer := io.MultiWriter(destination, s.digest)
-
-	_, err = io.CopyBuffer(writer, source, s.buffer)
-	if err != nil {
-		return 0, err
-	}
-
-	err = destination.Close()
-	if err != nil {
-		return 0, err
-	}
-
-	err = s.root.Rename(temporaryName, name)
-	return s.digest.Sum64(), err
+type assetInput struct {
+	Format string `json:"format"`
 }
 
-func SyncAssets() error {
-	infos, err := readAssetInfos(theme.assets)
+type assetOutput struct {
+	EntryPoint string        `json:"entryPoint"`
+	CSSBundle  string        `json:"cssBundle"`
+	Imports    []assetImport `json:"imports"`
+}
+
+type assetImport struct {
+	Path string `json:"path"`
+}
+
+func BuildThemeAssets(source fs.FS, options ConfigAssets) (*AssetCatalogue, error) {
+	err := options.Validate()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	info, err := public.Lstat("assets")
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+	files, err := readThemeAssets(source)
+	if err != nil {
+		return nil, err
 	}
 
-	if err == nil && !info.IsDir() {
-		err = public.RemoveAll("assets")
-		if err != nil {
-			return err
+	catalogue := &AssetCatalogue{
+		entries:   make(map[string]assetEntry, len(files)),
+		scripts:   make(map[string]bool, len(files)),
+		outputs:   make(map[string][]byte, len(files)),
+		originals: make(map[string][]byte, len(files)),
+	}
+
+	for _, name := range options.Entrypoints {
+		if _, exists := files[name]; !exists {
+			return nil, fmt.Errorf("theme entrypoint %q does not exist", name)
 		}
 	}
 
-	err = public.MkdirAll("assets", 0755)
-	if err != nil {
-		return err
-	}
+	for name, contents := range files {
+		extension := path.Ext(name)
+		if extension == ".js" || extension == ".mjs" {
+			catalogue.scripts[name] = true
 
-	root, err := public.OpenRoot("assets")
-	if err != nil {
-		return err
-	}
-
-	defer root.Close()
-
-	manifest, err := readAssetManifest(root)
-	if err != nil {
-		return err
-	}
-
-	err = root.RemoveAll(".manifest")
-	if err != nil {
-		return err
-	}
-
-	err = pruneAssets(root, infos)
-	if err != nil {
-		return err
-	}
-
-	syncer := AssetSyncer{
-		root:     root,
-		source:   theme.assets,
-		manifest: manifest,
-		digest:   fnv.New64a(),
-		buffer:   make([]byte, 32*1024),
-	}
-
-	var writer ManifestWriter
-
-	for name, info := range infos {
-		if info.IsDir() {
-			err = root.MkdirAll(name, 0755)
-			if err != nil {
-				return fmt.Errorf("create asset directory %q: %w", name, err)
+			if options.Compile {
+				continue
 			}
+		} else if extension != ".css" {
+			catalogue.originals[path.Join("assets", name)] = contents
 
 			continue
 		}
 
-		entry, err := syncer.syncFile(name, info)
+		err = buildAsset(catalogue, files, name, options)
 		if err != nil {
-			return fmt.Errorf("sync asset %q: %w", name, err)
-		}
-
-		err = writer.Add(entry)
-		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	return writeAssetManifest(root, &writer)
+	for _, name := range options.Entrypoints {
+		err = buildAsset(catalogue, files, name, options)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	for name, contents := range catalogue.originals {
+		if output, exists := catalogue.outputs[name]; exists && !bytes.Equal(contents, output) {
+			return nil, fmt.Errorf("theme resource %q conflicts with a generated output; rename the source resource", name)
+		}
+	}
+
+	return catalogue, nil
 }
 
-func readAssetInfos(source fs.FS) (map[string]fs.FileInfo, error) {
-	infos := make(map[string]fs.FileInfo)
+func readThemeAssets(source fs.FS) (map[string][]byte, error) {
+	files := make(map[string][]byte)
 
 	if source == nil {
-		return infos, nil
+		return files, nil
 	}
 
 	err := fs.WalkDir(source, ".", func(name string, entry fs.DirEntry, walkErr error) error {
@@ -208,103 +122,292 @@ func readAssetInfos(source fs.FS) (map[string]fs.FileInfo, error) {
 			return nil
 		}
 
-		if !validManifestName(name) || len(name) > 1<<16-1 {
-			return fmt.Errorf("invalid asset name %q", name)
+		if !validAssetPath(name) {
+			return fmt.Errorf("invalid theme asset path %q", name)
 		}
 
-		info, err := entry.Info()
+		if entry.IsDir() {
+			return nil
+		}
+
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("theme asset %q must be a regular file (symlinks are not supported)", name)
+		}
+
+		contents, err := fs.ReadFile(source, name)
 		if err != nil {
 			return err
 		}
 
-		if !info.IsDir() && !info.Mode().IsRegular() {
-			return fmt.Errorf("asset %q must be a regular file or directory", name)
-		}
-
-		infos[name] = info
+		files[name] = contents
 
 		return nil
 	})
 
-	if err != nil {
-		return nil, fmt.Errorf("read theme assets: %w", err)
-	}
-
-	return infos, nil
+	return files, err
 }
 
-func readAssetManifest(root *os.Root) (*Manifest, error) {
-	info, err := root.Lstat(".manifest")
-	if errors.Is(err, fs.ErrNotExist) {
-		return &Manifest{}, nil
-	}
+func buildAsset(catalogue *AssetCatalogue, files map[string][]byte, name string, settings ConfigAssets) error {
+	isCSS := path.Ext(name) == ".css"
+	compile := settings.Compile || isCSS
 
+	workingDirectory, err := filepath.Abs(".")
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	if !info.Mode().IsRegular() {
-		return &Manifest{}, nil
+	options := api.BuildOptions{
+		AbsWorkingDir:       workingDirectory,
+		Outdir:              assetOutputDirectory,
+		EntryPointsAdvanced: []api.EntryPoint{{InputPath: name, OutputPath: strings.TrimSuffix(name, path.Ext(name))}},
+		EntryNames:          "[dir]/[name]-[hash]",
+		AssetNames:          "[name]-[hash]",
+		PublicPath:          "/" + assetOutputDirectory,
+		Bundle:              true,
+		Platform:            api.PlatformBrowser,
+		Format:              api.FormatIIFE,
+		Target:              api.ES2020,
+		TreeShaking:         api.TreeShakingFalse,
+		Metafile:            true,
+		Write:               false,
+		LogLevel:            api.LogLevelSilent,
+		MinifyWhitespace:    settings.Minify,
+		MinifyIdentifiers:   settings.Minify,
+		MinifySyntax:        settings.Minify,
+		LogOverride: map[string]api.LogLevel{
+			"empty-glob":                   api.LogLevelError,
+			"empty-import-meta":            api.LogLevelError,
+			"indirect-require":             api.LogLevelError,
+			"unsupported-require-call":     api.LogLevelError,
+			"unsupported-dynamic-import":   api.LogLevelError,
+			"require-resolve-not-external": api.LogLevelError,
+		},
+		Plugins: []api.Plugin{themeAssetPlugin(files, compile)},
 	}
 
-	file, err := root.Open(".manifest")
+	result := api.Build(options)
+
+	err = assetBuildError(name, result)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	defer file.Close()
+	var metadata assetMetadata
 
-	return ReadManifest(file)
-}
+	err = json.Unmarshal([]byte(result.Metafile), &metadata)
+	if err != nil {
+		return err
+	}
 
-func pruneAssets(root *os.Root, infos map[string]fs.FileInfo) error {
-	return fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	if !compile {
+		input := metadata.Inputs["theme:"+name]
+		if input.Format == "cjs" || input.Format == "esm" && path.Ext(name) == ".js" {
+			return fmt.Errorf("theme script %q uses module syntax: enable theme.assets.compile and declare its entrypoint (or use .mjs for a self-contained ES module)", name)
+		}
+	}
+
+	if !compile {
+		options.Bundle = false
+		options.Format = api.FormatIIFE
+
+		if path.Ext(name) == ".js" {
+			options.Format = api.FormatDefault
 		}
 
-		if name == "." {
-			return nil
-		}
+		result = api.Build(options)
 
-		info, exists := infos[name]
-		if exists && entry.IsDir() == info.IsDir() && (entry.IsDir() || entry.Type().IsRegular()) {
-			return nil
-		}
-
-		err := root.RemoveAll(name)
+		err = assetBuildError(name, result)
 		if err != nil {
-			return fmt.Errorf("remove stale asset %q: %w", name, err)
+			return err
 		}
 
-		if entry.IsDir() {
-			return fs.SkipDir
+		metadata = assetMetadata{}
+
+		err = json.Unmarshal([]byte(result.Metafile), &metadata)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, output := range result.OutputFiles {
+		if strings.HasSuffix(output.Path, ".js") {
+			err = validateBrowserScript(name, output.Contents)
+			if err != nil {
+				return err
+			}
 		}
 
-		return nil
-	})
+		relative, err := filepath.Rel(workingDirectory, output.Path)
+		if err != nil {
+			return err
+		}
+
+		outputName := filepath.ToSlash(relative)
+		if previous, exists := catalogue.outputs[outputName]; exists && !bytes.Equal(previous, output.Contents) {
+			return fmt.Errorf("theme output %q conflicts with another generated asset", outputName)
+		}
+
+		catalogue.outputs[outputName] = output.Contents
+	}
+
+	for outputName, output := range metadata.Outputs {
+		if output.EntryPoint != "theme:"+name || isCSS != strings.HasSuffix(outputName, ".css") {
+			continue
+		}
+
+		catalogue.entries[name] = assetEntry{output: outputName, css: output.CSSBundle}
+	}
+
+	if _, exists := catalogue.entries[name]; !exists {
+		return fmt.Errorf("esbuild did not produce an entry for %q", name)
+	}
+
+	return nil
 }
 
-func writeAssetManifest(root *os.Root, writer *ManifestWriter) error {
-	temporaryName := ".mdgo-" + rand.Text() + ".tmp"
+// Use esbuild's symbol resolution to detect surviving global require references,
+// including computed property access and helpers that esbuild cannot bundle.
+// This probe is discarded; it never changes the published script or its scope.
+func validateBrowserScript(name string, contents []byte) error {
+	result := api.Build(api.BuildOptions{
+		Stdin:       &api.StdinOptions{Contents: string(contents), Sourcefile: name},
+		Bundle:      true,
+		Write:       false,
+		Metafile:    true,
+		LogLevel:    api.LogLevelSilent,
+		TreeShaking: api.TreeShakingTrue,
+		Define:      map[string]string{"require": "__mdgo_browser_require__"},
+		Inject:      []string{"mdgo:require-probe"},
+		Plugins: []api.Plugin{{
+			Name: "browser-require-probe",
+			Setup: func(build api.PluginBuild) {
+				build.OnResolve(api.OnResolveOptions{Filter: "^mdgo:"}, func(args api.OnResolveArgs) (api.OnResolveResult, error) {
+					return api.OnResolveResult{Path: args.Path, Namespace: "probe", External: args.Path == "mdgo:browser-require", SideEffects: api.SideEffectsFalse}, nil
+				})
 
-	file, err := root.OpenFile(temporaryName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+				build.OnLoad(api.OnLoadOptions{Filter: ".*", Namespace: "probe"}, func(args api.OnLoadArgs) (api.OnLoadResult, error) {
+					return api.OnLoadResult{Contents: new(`export { default as __mdgo_browser_require__ } from "mdgo:browser-require";`), Loader: api.LoaderJS}, nil
+				})
+			},
+		}},
+	})
+
+	err := assetBuildError(name, result)
 	if err != nil {
 		return err
 	}
 
-	defer root.Remove(temporaryName)
-	defer file.Close()
+	var metadata assetMetadata
 
-	_, err = writer.WriteTo(file)
+	err = json.Unmarshal([]byte(result.Metafile), &metadata)
 	if err != nil {
 		return err
 	}
 
-	err = file.Close()
-	if err != nil {
-		return err
+	for _, output := range metadata.Outputs {
+		for _, imported := range output.Imports {
+			if imported.Path == "mdgo:browser-require" {
+				return fmt.Errorf("theme script %q retains a runtime require reference (including require.resolve): use static relative imports or static require calls that esbuild can bundle", name)
+			}
+		}
 	}
 
-	return root.Rename(temporaryName, ".manifest")
+	return nil
+}
+
+func themeAssetPlugin(files map[string][]byte, compile bool) api.Plugin {
+	return api.Plugin{
+		Name: "theme-assets",
+		Setup: func(build api.PluginBuild) {
+			build.OnResolve(api.OnResolveOptions{Filter: ".*"}, func(args api.OnResolveArgs) (api.OnResolveResult, error) {
+				if args.Kind == api.ResolveJSRequireResolve {
+					return api.OnResolveResult{}, fmt.Errorf("%q: require.resolve is unsupported in browser assets; use a static import", args.Importer)
+				}
+
+				name := args.Path
+				suffix := ""
+
+				isCSS := args.Kind == api.ResolveCSSImportRule || args.Kind == api.ResolveCSSURLToken
+				if isCSS && (strings.HasPrefix(name, "https://") || strings.HasPrefix(name, "http://") || strings.HasPrefix(name, "//") || strings.HasPrefix(name, "data:") || strings.HasPrefix(name, "#")) {
+					return api.OnResolveResult{Path: name, External: true}, nil
+				}
+
+				if args.Kind != api.ResolveEntryPoint {
+					if !compile {
+						return api.OnResolveResult{}, fmt.Errorf("%q imports %q: enable theme.assets.compile and declare entrypoints", args.Importer, name)
+					}
+
+					if !isCSS && !strings.HasPrefix(name, "./") && !strings.HasPrefix(name, "../") {
+						return api.OnResolveResult{}, fmt.Errorf("%q: import %q must be a relative theme asset; packages and external JavaScript are unsupported", args.Importer, name)
+					}
+
+					index := strings.IndexAny(name, "?#")
+					if index >= 0 {
+						suffix = name[index:]
+						name = name[:index]
+					}
+
+					if strings.HasPrefix(name, "/assets/") && isCSS {
+						name = strings.TrimPrefix(name, "/assets/")
+					} else if strings.HasPrefix(name, "/") {
+						return api.OnResolveResult{}, fmt.Errorf("asset reference %q is outside the theme assets directory", args.Path)
+					} else {
+						name = path.Join(path.Dir(args.Importer), name)
+					}
+				}
+
+				if !validAssetPath(name) {
+					return api.OnResolveResult{}, fmt.Errorf("invalid or escaping theme asset reference %q from %q", args.Path, args.Importer)
+				}
+
+				if _, exists := files[name]; !exists {
+					return api.OnResolveResult{}, fmt.Errorf("theme asset %q referenced by %q does not exist; use an explicit filename relative to the importer", name, args.Importer)
+				}
+
+				return api.OnResolveResult{Path: name, Namespace: "theme", Suffix: suffix}, nil
+			})
+
+			build.OnLoad(api.OnLoadOptions{Filter: ".*", Namespace: "theme"}, func(args api.OnLoadArgs) (api.OnLoadResult, error) {
+				loader, err := themeAssetLoader(path.Ext(args.Path))
+				if err != nil {
+					return api.OnLoadResult{}, err
+				}
+
+				contents := string(files[args.Path])
+
+				return api.OnLoadResult{Contents: new(contents), Loader: loader}, nil
+			})
+
+			// Computed import globs bypass OnResolve. Never allow their matches
+			// to fall through to esbuild's native filesystem loader.
+			build.OnLoad(api.OnLoadOptions{Filter: ".*"}, func(args api.OnLoadArgs) (api.OnLoadResult, error) {
+				return api.OnLoadResult{}, fmt.Errorf("cannot load %q outside the theme assets filesystem; replace computed imports with explicit relative filenames", args.Path)
+			})
+		},
+	}
+}
+
+func themeAssetLoader(extension string) (api.Loader, error) {
+	switch extension {
+	case ".js", ".mjs":
+		return api.LoaderJS, nil
+	case ".css":
+		return api.LoaderCSS, nil
+	case ".json":
+		return api.LoaderJSON, nil
+	case ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".eot":
+		return api.LoaderFile, nil
+	default:
+		return api.LoaderNone, fmt.Errorf("unsupported imported asset type %q; use .js/.mjs, CSS, JSON, or a supported image/font", extension)
+	}
+}
+
+func assetBuildError(name string, result api.BuildResult) error {
+	if len(result.Errors) == 0 {
+		return nil
+	}
+
+	messages := api.FormatMessages(result.Errors, api.FormatMessagesOptions{Kind: api.ErrorMessage, Color: false})
+
+	return fmt.Errorf("build theme asset %q: %s", name, strings.Join(messages, "\n"))
 }
