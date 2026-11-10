@@ -134,15 +134,30 @@ td {
 }
 
 footer {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: center;
+	gap: 0.5rem 0.75rem;
 	margin-top: auto;
-	padding: 1.5rem;
+	padding: 1rem 1.5rem;
 	color: var(--muted);
 	font-size: 0.75rem;
 	text-align: center;
 }
 
 footer span {
-	margin-inline: 0.5rem;
+	border-inline-start: 1px solid var(--border);
+	padding-inline-start: 0.75rem;
+	white-space: nowrap;
+}
+
+footer a {
+	color: inherit;
+}
+
+footer a:hover {
+	color: var(--foreground);
 }
 
 button,

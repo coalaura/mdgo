@@ -15,6 +15,7 @@ import (
 type adminPageData struct {
 	View          string
 	Title         string
+	Year          int
 	Error         string
 	Notice        string
 	Authenticated bool
@@ -65,6 +66,7 @@ func renderAdminPage(w http.ResponseWriter, r *http.Request, status int, data ad
 
 	data.Authenticated = r.Context().Value(authKey) == true
 	data.CSRF = adminCSRFToken(r)
+	data.Year = time.Now().Year()
 
 	var rendered bytes.Buffer
 
