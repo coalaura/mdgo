@@ -22,8 +22,8 @@ var (
 	ThemeDefaultFS embed.FS
 )
 
-func (t *Theme) Render(wr io.Writer, markdown []byte) error {
-	return t.layout.Execute(wr, nil, NewThemeData(markdown, nil))
+func (t *Theme) Render(wr io.Writer, markdown []byte, meta Metadata) error {
+	return t.layout.Execute(wr, nil, NewThemeData(markdown, meta))
 }
 
 func LoadTheme() (*Theme, error) {
@@ -103,9 +103,9 @@ func LoadThemeAssets(root fs.FS) (fs.FS, error) {
 	return fs.Sub(root, "assets")
 }
 
-func NewThemeData(content []byte, page map[string]any) map[string]any {
+func NewThemeData(content []byte, meta Metadata) map[string]any {
 	return map[string]any{
 		"content": content,
-		"page":    page,
+		"page":    meta,
 	}
 }

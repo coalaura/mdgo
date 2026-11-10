@@ -190,6 +190,11 @@ func writeFrontendHTML(name, markdownName string) error {
 		return err
 	}
 
+	source, meta, err := ParseMarkdownMetadata(source)
+	if err != nil {
+		return err
+	}
+
 	temporaryName := path.Join(path.Dir(name), ".mdgo-"+rand.Text()+".tmp")
 
 	file, err := public.OpenFile(temporaryName, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
@@ -213,7 +218,7 @@ func writeFrontendHTML(name, markdownName string) error {
 
 	writer := bufio.NewWriter(file)
 
-	err = theme.Render(writer, markdown.Bytes())
+	err = theme.Render(writer, markdown.Bytes(), meta)
 	if err != nil {
 		return err
 	}
