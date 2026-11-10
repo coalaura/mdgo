@@ -38,6 +38,11 @@ func main() {
 	public, err = LoadPublicRoot()
 	log.MustFail(err)
 
+	log.Println("Syncing theme assets...")
+
+	err = SyncAssets()
+	log.MustFail(err)
+
 	log.Println("Preparing router...")
 
 	r := chi.NewRouter()
