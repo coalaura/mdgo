@@ -20,23 +20,7 @@ func listMarkdownPages() ([]adminMarkdownPage, error) {
 
 	var pages []adminMarkdownPage
 
-	err := fs.WalkDir(public.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		if reservedAdminSource(name) {
-			if entry.IsDir() {
-				return fs.SkipDir
-			}
-
-			return nil
-		}
-
-		if !entry.Type().IsRegular() || !validMarkdownSource(name) {
-			return nil
-		}
-
+	err := walkMarkdownSources(func(name string) error {
 		cached, err := public.Lstat(markdownCachePath(name))
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
@@ -81,6 +65,8 @@ func clearMarkdownPageCache(name string) error {
 	}
 
 	cache := markdownCachePath(name)
+	frontendCache.Delete(cache)
+	resetSitemapCache()
 
 	info, err := public.Lstat(cache)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -96,6 +82,29 @@ func clearMarkdownPageCache(name string) error {
 	}
 
 	return public.Remove(cache)
+}
+
+// Callers hold the site lock through enumeration and use of the source paths.
+func walkMarkdownSources(visit func(string) error) error {
+	return fs.WalkDir(public.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		if reservedAdminSource(name) {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+
+			return nil
+		}
+
+		if !entry.Type().IsRegular() || !validMarkdownSource(name) {
+			return nil
+		}
+
+		return visit(name)
+	})
 }
 
 func validMarkdownSource(name string) bool {

@@ -81,11 +81,15 @@ func NewRouter() *chi.Mux {
 	router := chi.NewRouter()
 
 	router.Use(log.Middleware())
+	router.Use(ResponseCache)
 	router.Use(ThemeErrors)
 	router.Use(middleware.Recoverer)
 
 	router.Get("/*", HandleFrontend)
 	router.Head("/*", HandleFrontend)
+
+	router.Get("/sitemap.xml", HandleSitemap)
+	router.Head("/sitemap.xml", HandleSitemap)
 
 	RegisterAdminRoutes(router)
 

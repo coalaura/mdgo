@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/netip"
+	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/goccy/go-yaml"
 )
@@ -25,6 +29,10 @@ type ConfigServer struct {
 type ConfigTheme struct {
 	Name   string       `yaml:"name"`
 	Assets ConfigAssets `yaml:"assets"`
+}
+
+type ConfigSite struct {
+	URL string `yaml:"url"`
 }
 
 type ConfigAssets struct {
@@ -65,6 +73,7 @@ type ConfigTLDs []string
 // gost:preserve-layout
 type Config struct {
 	Server   ConfigServer   `yaml:"server"`
+	Site     ConfigSite     `yaml:"site"`
 	Theme    ConfigTheme    `yaml:"theme"`
 	Frontend ConfigFrontend `yaml:"frontend"`
 	Tokens   ConfigTokens   `yaml:"tokens"`
@@ -103,7 +112,59 @@ func (c *Config) UnmarshalYAML(data []byte) error {
 
 	*c = Config(values)
 
-	return c.Theme.Validate()
+	err = c.Theme.Validate()
+	if err != nil {
+		return err
+	}
+
+	return c.Site.Validate()
+}
+
+func (c ConfigSite) Validate() error {
+	if c.URL == "" {
+		return nil
+	}
+
+	base, err := url.Parse(c.URL)
+	if err != nil {
+		return fmt.Errorf("invalid site.url: %w", err)
+	}
+
+	validScheme := base.Scheme == "http" || base.Scheme == "https"
+	if !validScheme || base.Hostname() == "" || base.Opaque != "" || base.User != nil || strings.ContainsAny(c.URL, "?#\\") || !utf8.ValidString(c.URL) || !utf8.ValidString(base.Path) {
+		return fmt.Errorf("invalid site.url: use an absolute HTTP(S) URL without credentials, query or fragment")
+	}
+
+	if strings.ContainsAny(base.Host, "[]") || strings.Contains(base.Hostname(), ":") {
+		_, err = netip.ParseAddr(base.Hostname())
+		if err != nil || !strings.HasPrefix(base.Host, "[") {
+			return fmt.Errorf("invalid site.url IP address")
+		}
+	}
+
+	port := base.Port()
+	if port != "" {
+		number, err := strconv.Atoi(port)
+		if err != nil || number < 1 || number > 65535 {
+			return fmt.Errorf("invalid site.url port %q", port)
+		}
+	} else if strings.HasSuffix(base.Host, ":") {
+		return fmt.Errorf("invalid site.url: empty port")
+	}
+
+	for component := range strings.SplitSeq(base.Path, "/") {
+		if component == "." || component == ".." || strings.Contains(component, "\\") {
+			return fmt.Errorf("invalid site.url path prefix")
+		}
+	}
+
+	for _, character := range base.Path {
+		if character < 0x20 || character == 0x7f {
+			return fmt.Errorf("invalid site.url path prefix")
+		}
+	}
+
+	return nil
 }
 
 func (c ConfigTheme) Validate() error {
@@ -153,6 +214,11 @@ func (c *Config) Init() error {
 		return err
 	}
 
+	err = c.Site.Validate()
+	if err != nil {
+		return err
+	}
+
 	// check if port is valid
 	if c.Server.Port <= 0 || c.Server.Port >= 65535 {
 		return fmt.Errorf("invalid server.port %d", c.Server.Port)
@@ -186,12 +252,15 @@ func (c *Config) Store() error {
 	var (
 		buffer   bytes.Buffer
 		comments = yaml.CommentMap{
+			"$.site":     {yaml.HeadComment("")},
 			"$.theme":    {yaml.HeadComment("")},
-			"$.frontend": {yaml.HeadComment("")},
+			"$.frontend": {yaml.HeadComment("", " managed fingerprinted assets: public, max-age=31536000, immutable; other public responses: no-cache", " admin, authenticated/private responses and errors: no-store", " page and sitemap ETags support revalidation; rendered HTML has no Last-Modified", " clearing the server cache invalidates pages, validators and sitemap data and removes obsolete assets; it does not purge browser caches")},
 			"$.tokens":   {yaml.HeadComment("")},
 
 			"$.server.port":   {yaml.HeadComment(" port to serve mdgo on (required; default 2727)")},
 			"$.server.secure": {yaml.HeadComment(" if mdgo is being served with TLS (default: false)")},
+
+			"$.site.url": {yaml.HeadComment(" public absolute HTTP(S) URL without credentials, query or fragment; empty disables /sitemap.xml", " example: https://example.com/docs; the path prefix is retained in canonical sitemap URLs", " sitemap: sorted, deduplicated routable Markdown pages (including the homepage), excluding admin/assets and redirects", " UTF-8 XML contains loc only; generated on first request and reused until a page/full cache clear or restart", " limits: 50,000 URLs, 50 MiB uncompressed, each URL shorter than 2048 characters; overflow returns HTTP 500 and logs the cause")},
 
 			"$.theme.name":               {yaml.HeadComment(" mdgo theme (default: \"default\")")},
 			"$.theme.assets.compile":     {yaml.HeadComment(" bundle declared JavaScript entrypoints and dependencies")},

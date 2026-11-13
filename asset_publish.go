@@ -33,17 +33,8 @@ func InitializeTheme() error {
 		return err
 	}
 
-	siteMutex.Lock()
-	defer siteMutex.Unlock()
-
-	backups, err := publishAssets(public, next.assets)
-	if err != nil {
-		return errors.Join(err, restoreAssets(public, backups))
-	}
-
-	theme = next.theme
-
-	return nil
+	// Disk HTML has no validators for this process's theme generation.
+	return activateTheme(next)
 }
 
 func ClearThemeCache() error {
@@ -80,8 +71,19 @@ func activateTheme(next *themeBuild) error {
 func publishAssets(root *os.Root, build *assetBuild) ([]assetBackup, error) {
 	backups := make([]assetBackup, 0, len(build.originals))
 
+	if theme != nil {
+		for name := range build.originals {
+			_, wasOutput := theme.catalogue.outputs[name]
+			_, remainsOutput := build.catalogue.outputs[name]
+
+			if wasOutput && !remainsOutput {
+				return backups, fmt.Errorf("theme resource %q reuses a fingerprinted URL; rename the source resource", name)
+			}
+		}
+	}
+
 	for name, contents := range build.outputs {
-		err := writeAsset(root, name, contents)
+		err := writeAsset(root, name, contents, true)
 		if err != nil {
 			return backups, err
 		}
@@ -99,7 +101,7 @@ func publishAssets(root *os.Root, build *assetBuild) ([]assetBackup, error) {
 
 		backups = append(backups, assetBackup{name: name, contents: previous, existed: err == nil})
 
-		err = writeAsset(root, name, contents)
+		err = writeAsset(root, name, contents, false)
 		if err != nil {
 			return backups, err
 		}
@@ -115,7 +117,7 @@ func restoreAssets(root *os.Root, backups []assetBackup) error {
 		var err error
 
 		if backup.existed {
-			err = writeAsset(root, backup.name, backup.contents)
+			err = writeAsset(root, backup.name, backup.contents, false)
 		} else {
 			err = root.Remove(backup.name)
 			if errors.Is(err, fs.ErrNotExist) {
@@ -131,7 +133,7 @@ func restoreAssets(root *os.Root, backups []assetBackup) error {
 	return errors.Join(failures...)
 }
 
-func writeAsset(root *os.Root, name string, contents []byte) error {
+func writeAsset(root *os.Root, name string, contents []byte, immutable bool) error {
 	previous, err := root.ReadFile(name)
 	if err == nil && bytes.Equal(previous, contents) {
 		return nil
@@ -139,6 +141,10 @@ func writeAsset(root *os.Root, name string, contents []byte) error {
 
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
+	}
+
+	if err == nil && immutable {
+		return fmt.Errorf("refusing to replace fingerprinted asset %q with different contents", name)
 	}
 
 	err = root.MkdirAll(path.Dir(name), 0755)
@@ -159,6 +165,10 @@ func writeAsset(root *os.Root, name string, contents []byte) error {
 }
 
 func clearHTMLCache(root *os.Root) error {
+	frontendCache.Clear()
+
+	resetSitemapCache()
+
 	return fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr

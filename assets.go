@@ -295,13 +295,7 @@ func buildAsset(build *assetBuild, files map[string][]byte, name string, setting
 		}
 
 		build.outputs[outputName] = output.Contents
-		digests := assetDigests{}
-
-		if strings.HasSuffix(outputName, ".js") || strings.HasSuffix(outputName, ".css") {
-			digests = digestAsset(output.Contents)
-		}
-
-		catalogue.outputs[outputName] = digests
+		catalogue.outputs[outputName] = digestAsset(output.Contents)
 	}
 
 	for outputName, output := range metadata.Outputs {

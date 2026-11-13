@@ -10,6 +10,8 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/coalaura/lock"
 )
@@ -25,9 +27,20 @@ type frontendResponse struct {
 	file     *os.File
 	info     fs.FileInfo
 	redirect string
+	etag     string
+	policy   string
+	modified time.Time
 }
 
-var frontendLocks = lock.NewLockMap[string]()
+type frontendCacheEntry struct {
+	info fs.FileInfo
+	etag string
+}
+
+var (
+	frontendLocks = lock.NewLockMap[string]()
+	frontendCache sync.Map
+)
 
 func LoadPublicRoot() (*os.Root, error) {
 	_, err := os.Stat(PublicDirectory)
@@ -54,7 +67,9 @@ func HandleFrontend(w http.ResponseWriter, r *http.Request) {
 
 	defer response.file.Close()
 
-	http.ServeContent(w, r, response.name, response.info.ModTime(), response.file)
+	setPublicCacheHeaders(w, response.policy, response.etag)
+
+	http.ServeContent(w, r, response.name, response.modified, response.file)
 }
 
 // Keep cache lookup and publication inside the invalidation barrier. The opened
@@ -63,6 +78,48 @@ func prepareFrontendResponse(r *http.Request) (frontendResponse, error) {
 	siteMutex.RLock()
 	defer siteMutex.RUnlock()
 
+	response, err := resolveFrontendResponse(r)
+	if errors.Is(err, fs.ErrNotExist) && strings.HasSuffix(response.name, ".html") && !reservedAdminSource(response.name) {
+		response.file, response.info, err = renderFrontendFile(response.name, r.URL.EscapedPath())
+	}
+
+	if err != nil || response.redirect != "" {
+		return response, err
+	}
+
+	response.policy = cacheRevalidate
+	response.modified = response.info.ModTime()
+
+	if strings.EqualFold(path.Ext(response.name), ".html") {
+		// A source timestamp cannot validate a rendered page or its theme/assets.
+		response.modified = time.Time{}
+
+		// A concurrent reader can open the renamed file before its renderer has
+		// published metadata. Wait for that publication before selecting it.
+		frontendLocks.Lock(response.name)
+		cached, exists := frontendCache.Load(response.name)
+		frontendLocks.Unlock(response.name)
+
+		if exists {
+			entry := cached.(frontendCacheEntry)
+			if os.SameFile(entry.info, response.info) && entry.info.Size() == response.info.Size() && entry.info.ModTime().Equal(response.info.ModTime()) {
+				response.etag = entry.etag
+			}
+		}
+	}
+
+	if digests, exists := theme.catalogue.outputs[response.name]; exists {
+		response.policy = cacheImmutable
+		response.etag = `"` + digests.sha256 + `"`
+		response.modified = time.Time{}
+	}
+
+	return response, nil
+}
+
+// Resolve without rendering so sitemap generation observes the same file and
+// directory precedence as a request. The caller holds the site lock.
+func resolveFrontendResponse(r *http.Request) (frontendResponse, error) {
 	name := strings.TrimPrefix(r.URL.Path, "/")
 	if name == "" || strings.HasSuffix(name, "/") {
 		name += "index"
@@ -80,6 +137,10 @@ func prepareFrontendResponse(r *http.Request) (frontendResponse, error) {
 		if strings.EqualFold(strings.TrimRight(assetName, ". "), ".manifest") {
 			return frontendResponse{}, fs.ErrNotExist
 		}
+
+		file, info, err := openFrontendFile(name)
+
+		return frontendResponse{name: name, file: file, info: info}, err
 	}
 
 	redirect, err := frontendRedirect(r, name)
@@ -102,15 +163,7 @@ func prepareFrontendResponse(r *http.Request) (frontendResponse, error) {
 		file, info, err = openFrontendFile(name)
 	}
 
-	if errors.Is(err, fs.ErrNotExist) {
-		file, info, err = renderFrontendFile(name, r.URL.EscapedPath())
-	}
-
-	if err != nil {
-		return frontendResponse{}, err
-	}
-
-	return frontendResponse{name: name, file: file, info: info}, nil
+	return frontendResponse{name: name, file: file, info: info}, err
 }
 
 func frontendRedirect(r *http.Request, name string) (string, error) {
@@ -243,17 +296,14 @@ func writeFrontendHTML(name, markdownName, pagePath string) error {
 
 	var rendered bytes.Buffer
 
+	rendered.WriteString(generatedHTMLMarker)
+
 	err = theme.Render(&rendered, markdown.Bytes(), meta)
 	if err != nil {
 		return err
 	}
 
 	completed, err := theme.catalogue.RewriteHTML(rendered.Bytes(), pagePath)
-	if err != nil {
-		return err
-	}
-
-	_, err = file.WriteString(generatedHTMLMarker)
 	if err != nil {
 		return err
 	}
@@ -268,7 +318,23 @@ func writeFrontendHTML(name, markdownName, pagePath string) error {
 		return err
 	}
 
-	return public.Rename(temporaryName, name)
+	err = public.Rename(temporaryName, name)
+	if err != nil {
+		return err
+	}
+
+	// Read metadata after closing the writer: Windows can defer last-write
+	// timestamp updates until close. Use a file handle for stable identity.
+	published, info, err := openFrontendFile(name)
+	if err != nil {
+		return err
+	}
+
+	published.Close()
+
+	frontendCache.Store(name, frontendCacheEntry{info: info, etag: contentETag(completed)})
+
+	return nil
 }
 
 func writeFrontendError(w http.ResponseWriter, r *http.Request, err error) {
