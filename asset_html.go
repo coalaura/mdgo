@@ -11,16 +11,25 @@ import (
 	"golang.org/x/net/html"
 )
 
+type assetStyleScope struct {
+	styles map[string]bool
+	parent int
+}
+
 func (c *AssetCatalogue) RewriteHTML(source []byte, pagePath string) ([]byte, error) {
 	base, err := documentAssetBase(source, pagePath)
 	if err != nil {
 		return nil, err
 	}
 
-	styles := c.linkedStyles(source, base)
+	scopes := c.linkedStyles(source, base)
 	tokenizer := html.NewTokenizer(bytes.NewReader(source))
 
-	var output bytes.Buffer
+	var (
+		scope     int
+		nextScope int
+		output    bytes.Buffer
+	)
 
 	output.Grow(len(source))
 
@@ -37,13 +46,28 @@ func (c *AssetCatalogue) RewriteHTML(source []byte, pagePath string) ([]byte, er
 
 		raw := tokenizer.Raw()
 
-		if kind != html.StartTagToken && kind != html.SelfClosingTagToken {
+		if kind != html.StartTagToken && kind != html.SelfClosingTagToken && kind != html.EndTagToken {
 			output.Write(raw)
 
 			continue
 		}
 
 		token := tokenizer.Token()
+		if token.Data == "template" {
+			if kind == html.EndTagToken {
+				scope = scopes[scope].parent
+			} else {
+				nextScope++
+				scope = nextScope
+			}
+		}
+
+		if kind == html.EndTagToken {
+			output.Write(raw)
+
+			continue
+		}
+
 		attribute := ""
 
 		switch token.Data {
@@ -103,6 +127,8 @@ func (c *AssetCatalogue) RewriteHTML(source []byte, pagePath string) ([]byte, er
 
 			if entry.css != "" {
 				digest := c.outputs[entry.css].sha256
+				styles := scopes[scope].styles
+
 				if !styles[digest] {
 					link := html.Token{
 						Type: html.StartTagToken,
@@ -135,22 +161,34 @@ func (c *AssetCatalogue) RewriteHTML(source []byte, pagePath string) ([]byte, er
 	}
 }
 
-func (c *AssetCatalogue) linkedStyles(source []byte, base *url.URL) map[string]bool {
-	styles := make(map[string]bool)
+func (c *AssetCatalogue) linkedStyles(source []byte, base *url.URL) []assetStyleScope {
+	// Each template is inert until instantiated and owns independent stylesheet state.
+	scopes := []assetStyleScope{{styles: make(map[string]bool)}}
+	scope := 0
+
 	tokenizer := html.NewTokenizer(bytes.NewReader(source))
 
 	for {
 		kind := tokenizer.Next()
 		if kind == html.ErrorToken {
-			return styles
+			return scopes
 		}
 
-		if kind != html.StartTagToken && kind != html.SelfClosingTagToken {
+		if kind != html.StartTagToken && kind != html.SelfClosingTagToken && kind != html.EndTagToken {
 			continue
 		}
 
 		token := tokenizer.Token()
-		if token.Data != "link" {
+		if token.Data == "template" {
+			if kind == html.EndTagToken {
+				scope = scopes[scope].parent
+			} else {
+				scopes = append(scopes, assetStyleScope{styles: make(map[string]bool), parent: scope})
+				scope = len(scopes) - 1
+			}
+		}
+
+		if kind == html.EndTagToken || token.Data != "link" {
 			continue
 		}
 
@@ -178,7 +216,7 @@ func (c *AssetCatalogue) linkedStyles(source []byte, base *url.URL) map[string]b
 
 		digests, exists := c.outputs[name]
 		if exists && digests.sha256 != "" {
-			styles[digests.sha256] = true
+			scopes[scope].styles[digests.sha256] = true
 		}
 	}
 }

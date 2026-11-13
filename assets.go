@@ -214,7 +214,7 @@ func buildAsset(build *assetBuild, files map[string][]byte, name string, setting
 		// Classic scripts may share globals or contain guarded UMD branches.
 		// Probe browser branches without the CommonJS bindings bundling invents.
 		// None of these definitions apply to the published classic script.
-		options.Define = map[string]string{"module": "undefined", "exports": "undefined", "require": "undefined"}
+		options.Define = map[string]string{"module": "undefined", "exports": "undefined"}
 		options.LogOverride["indirect-require"] = api.LogLevelSilent
 		options.LogOverride["unsupported-require-call"] = api.LogLevelSilent
 		options.LogOverride["require-resolve-not-external"] = api.LogLevelSilent
@@ -225,6 +225,13 @@ func buildAsset(build *assetBuild, files map[string][]byte, name string, setting
 	err = assetBuildError(name, result)
 	if err != nil {
 		return err
+	}
+
+	if classic {
+		err = validateBrowserScript(name, files[name], true)
+		if err != nil {
+			return err
+		}
 	}
 
 	var metadata assetMetadata
@@ -267,7 +274,7 @@ func buildAsset(build *assetBuild, files map[string][]byte, name string, setting
 
 	for _, output := range result.OutputFiles {
 		if !classic && strings.HasSuffix(output.Path, ".js") {
-			err = validateBrowserScript(name, output.Contents)
+			err = validateBrowserScript(name, output.Contents, false)
 			if err != nil {
 				return err
 			}
@@ -314,10 +321,8 @@ func buildAsset(build *assetBuild, files map[string][]byte, name string, setting
 
 // Use esbuild's symbol resolution to detect surviving global require references,
 // including computed property access and helpers that esbuild cannot bundle.
-// Only isolated IIFE outputs use this probe. Bundling a classic script here
-// would invent CommonJS bindings and make guarded UMD branches look mandatory.
-func validateBrowserScript(name string, contents []byte) error {
-	result := api.Build(api.BuildOptions{
+func validateBrowserScript(name string, contents []byte, classic bool) error {
+	options := api.BuildOptions{
 		Stdin:       &api.StdinOptions{Contents: string(contents), Sourcefile: name},
 		Bundle:      true,
 		Write:       false,
@@ -338,7 +343,30 @@ func validateBrowserScript(name string, contents []byte) error {
 				})
 			},
 		}},
-	})
+	}
+
+	if classic {
+		// Substitute browser bindings before bundling can invent CommonJS locals.
+		browser := api.Transform(string(contents), api.TransformOptions{
+			Sourcefile:   name,
+			Define:       map[string]string{"module": "undefined", "exports": "undefined"},
+			MinifySyntax: true,
+			TreeShaking:  api.TreeShakingFalse,
+			LogLevel:     api.LogLevelSilent,
+		})
+
+		err := assetBuildError(name, api.BuildResult{Errors: browser.Errors})
+		if err != nil {
+			return err
+		}
+
+		options.Stdin.Contents = string(browser.Code)
+
+		// Classic globals can be called by another script, so retain unused declarations.
+		options.TreeShaking = api.TreeShakingFalse
+	}
+
+	result := api.Build(options)
 
 	err := assetBuildError(name, result)
 	if err != nil {
@@ -355,6 +383,10 @@ func validateBrowserScript(name string, contents []byte) error {
 	for _, output := range metadata.Outputs {
 		for _, imported := range output.Imports {
 			if imported.Path == "mdgo:browser-require" {
+				if classic {
+					return fmt.Errorf("theme script %q retains an unresolved CommonJS dependency: enable theme.assets.compile and declare entrypoints", name)
+				}
+
 				return fmt.Errorf("theme script %q retains a runtime require reference (including require.resolve): use static relative imports or static require calls that esbuild can bundle", name)
 			}
 		}
