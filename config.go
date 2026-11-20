@@ -43,19 +43,6 @@ type ConfigAssets struct {
 
 type configValues Config
 
-type legacyThemeName struct {
-	Name *string `yaml:"name"`
-}
-
-type legacyServerTheme struct {
-	Theme *string `yaml:"theme"`
-}
-
-type configMigration struct {
-	Server legacyServerTheme `yaml:"server"`
-	Theme  legacyThemeName   `yaml:"theme"`
-}
-
 // gost:preserve-layout
 type ConfigFrontend struct {
 	RedirectHTML  bool `yaml:"redirect_html"`
@@ -85,27 +72,6 @@ func (c *Config) UnmarshalYAML(data []byte) error {
 	err := yaml.Unmarshal(data, &values)
 	if err != nil {
 		return err
-	}
-
-	var migration configMigration
-
-	err = yaml.Unmarshal(data, &migration)
-	if err != nil {
-		return err
-	}
-
-	legacy := migration.Server.Theme
-	selected := migration.Theme.Name
-
-	if legacy != nil {
-		name := normalizeThemeName(*legacy)
-		if selected != nil && name != normalizeThemeName(*selected) {
-			return fmt.Errorf("conflicting server.theme %q and theme.name %q", *legacy, *selected)
-		}
-
-		if selected == nil {
-			values.Theme.Name = name
-		}
 	}
 
 	values.Theme.Name = normalizeThemeName(values.Theme.Name)
